@@ -23,12 +23,14 @@ public:
     void reset();
 
     // Appends the events for this block to `out` (cleared first). Events carry an
-    // absolute ppq; the caller converts to sample offsets.
+    // absolute ppq; the caller converts to sample offsets. If `sw.next` is set,
+    // steps whose nominal time is at or after sw.atPpq are read from that pattern.
     void process (const Transport& t,
                   const GlobalSettings& g,
                   const TrackSettingsArray& tracks,
                   const PatternModel& pattern,
-                  std::vector<MidiEvent>& out);
+                  std::vector<MidiEvent>& out,
+                  PatternSwitch sw = {});
 
     // Step currently under the playhead for UI display, -1 when idle.
     int currentStep (int track) const { return state[track].currentStep.load (std::memory_order_relaxed); }
@@ -51,16 +53,21 @@ private:
     struct TrackState
     {
         int64_t nextK = 0;
+        int64_t firstK = 0;          // first step after the last transport start / jump ("1st" condition)
+        int64_t lastFiredK = -1;     // for the Prev / !Prev conditions
         std::vector<Pending> pending;
         std::mt19937 rng;
         std::atomic<int> currentStep { -1 };
     };
 
+    bool conditionPasses (TrackState& st, int cond, int64_t k, int steps, const GlobalSettings& g) const;
     void scheduleStep (int trackIdx, int64_t k, const TrackSettings& s, const GlobalSettings& g,
                        const TrackModel& model, double msToPpq);
     void noteOn (std::vector<MidiEvent>& out, double at, const Pending& p);
     void allNotesOff (std::vector<MidiEvent>& out, double at);
-    static double maxOffsetPpq (const TrackSettings& s, double msToPpq);
+    // How far ahead of a block steps must be evaluated so that negative offsets
+    // (early timing, shift, humanise, push-swing) still land in time.
+    static double maxOffsetPpq (const TrackSettings& s, const GlobalSettings& g, const TrackModel& model, double msToPpq);
 
     std::array<TrackState, kNumTracks> state;
     std::vector<Active> active;

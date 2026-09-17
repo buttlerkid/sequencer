@@ -43,7 +43,7 @@ DYSequencerEditor::DYSequencerEditor (DYSequencerProcessor& p)
     };
     pads.onLayoutApplied = [this] { patternChanged(); };
 
-    global.onThemeToggle = [this]
+    header.onThemeToggle = [this]
     {
         proc.uiTheme = proc.uiTheme == 0 ? 1 : 0;
         applyTheme();
@@ -71,7 +71,7 @@ DYSequencerEditor::~DYSequencerEditor()
 void DYSequencerEditor::applyTheme()
 {
     lookAndFeel.setTheme (proc.uiTheme == 0 ? Theme::dark() : Theme::light());
-    global.refresh();
+    header.refresh();
     sendLookAndFeelChange();
     repaint();
 }
@@ -127,7 +127,7 @@ void DYSequencerEditor::layoutPanels()
     r.removeFromTop (8);
 
     auto left = r.removeFromLeft (250);
-    pads.setBounds (left.removeFromTop (juce::jmin (296, left.getHeight() * 55 / 100)));
+    pads.setBounds (left.removeFromTop (juce::jmin (270, left.getHeight() * 46 / 100)));
     left.removeFromTop (8);
     global.setBounds (left);
     r.removeFromLeft (8);
@@ -148,6 +148,8 @@ void DYSequencerEditor::timerCallback()
     overview.refresh();
     pads.refresh();
     edit.refresh();
+    header.refresh();
+    global.refresh();
     status.repaint();
 }
 

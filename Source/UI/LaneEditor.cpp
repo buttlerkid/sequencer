@@ -18,7 +18,7 @@ LaneEditor::LaneEditor (DYSequencerProcessor& p) : proc (p)
     tabs[0]->setToggleState (true, juce::dontSendNotification);
 
     resetButton.setTooltip ("Reset this lane to its default for every step");
-    resetButton.onClick = [this] { proc.pattern.tracks[track].resetLane (current); repaint(); };
+    resetButton.onClick = [this] { proc.editPattern().tracks[track].resetLane (current); repaint(); };
     addAndMakeVisible (resetButton);
 
     randomButton.setTooltip ("Randomise this lane across the pattern length");
@@ -30,13 +30,14 @@ LaneEditor::LaneEditor (DYSequencerProcessor& p) : proc (p)
         // timing and intervals stay modest, probability spans a useful range.
         switch (current)
         {
-            case Lane::Velocity:    generator.randomizeLane (proc.pattern.tracks[track], current, steps, 60, 127); break;
-            case Lane::Length:      generator.randomizeLane (proc.pattern.tracks[track], current, steps, 20, 120); break;
-            case Lane::Timing:      generator.randomizeLane (proc.pattern.tracks[track], current, steps, -16, 16); break;
-            case Lane::Probability: generator.randomizeLane (proc.pattern.tracks[track], current, steps, 40, 100); break;
-            case Lane::Repeats:     generator.randomizeLane (proc.pattern.tracks[track], current, steps, 1, 3); break;
-            case Lane::Interval:    generator.randomizeLane (proc.pattern.tracks[track], current, steps, -7, 7); break;
-            default:                generator.randomizeLane (proc.pattern.tracks[track], current, steps, info.min, info.max); break;
+            case Lane::Velocity:    generator.randomizeLane (proc.editPattern().tracks[track], current, steps, 60, 127); break;
+            case Lane::Length:      generator.randomizeLane (proc.editPattern().tracks[track], current, steps, 20, 120); break;
+            case Lane::Timing:      generator.randomizeLane (proc.editPattern().tracks[track], current, steps, -16, 16); break;
+            case Lane::Probability: generator.randomizeLane (proc.editPattern().tracks[track], current, steps, 40, 100); break;
+            case Lane::Repeats:     generator.randomizeLane (proc.editPattern().tracks[track], current, steps, 1, 3); break;
+            case Lane::Interval:    generator.randomizeLane (proc.editPattern().tracks[track], current, steps, -7, 7); break;
+            case Lane::Condition:   generator.randomizeLane (proc.editPattern().tracks[track], current, steps, CondAlways, Cond4of4); break;
+            default:                generator.randomizeLane (proc.editPattern().tracks[track], current, steps, info.min, info.max); break;
         }
         repaint();
     };
@@ -58,7 +59,7 @@ void LaneEditor::setLane (Lane l)
 void LaneEditor::resized()
 {
     auto tabsRow = tabArea();
-    const int w = 92;
+    const int w = juce::jmin (92, (tabsRow.getWidth() - 150) / tabs.size());
     for (auto* b : tabs)
         b->setBounds (tabsRow.removeFromLeft (w).reduced (2, 1));
 
@@ -79,8 +80,10 @@ juce::String LaneEditor::describe (int step) const
 {
     if (step < 0) return {};
     const auto& info = laneInfo (current);
-    const int v = proc.pattern.tracks[track].get (current, step);
+    const int v = proc.editPattern().tracks[track].get (current, step);
     juce::String s = "Step " + juce::String (step + 1) + "   " + juce::String (info.name) + " ";
+    if (current == Lane::Condition)
+        return s + conditionName (v);
     if (info.bipolar && v > 0) s += "+";
     s += juce::String (v) + juce::String (info.unit);
     return s;
@@ -90,7 +93,7 @@ void LaneEditor::paint (juce::Graphics& g)
 {
     const auto& t    = themeOf (*this);
     const auto  s    = proc.trackSettings (track);
-    const auto& tm   = proc.pattern.tracks[track];
+    const auto& tm   = proc.editPattern().tracks[track];
     const auto& info = laneInfo (current);
     const int steps  = clampT (s.steps, 1, kMaxSteps);
     const uint64_t mask = s.pulses > 0 ? euclidean (steps, s.pulses, s.rotate) : 0;
@@ -141,6 +144,14 @@ void LaneEditor::paint (juce::Graphics& g)
         g.setColour (fires ? t.bar : t.barDim);
         g.fillRoundedRectangle (bar, 2.0f);
 
+        if (current == Lane::Condition && col.getWidth() >= 20.0f)
+        {
+            // Conditions are categories: print the code on the column.
+            g.setColour (v == CondAlways ? t.textDim : t.text);
+            g.setFont (uiFont (juce::jmin (11.0f, col.getWidth() * 0.45f), v != CondAlways));
+            g.drawText (conditionName (v), col.toNearestInt().withTrimmedBottom (4), juce::Justification::centredBottom);
+        }
+
         if (i == hoverStep)
         {
             g.setColour (t.text.withAlpha (0.18f));
@@ -156,8 +167,16 @@ void LaneEditor::paint (juce::Graphics& g)
     // Value ticks on the right
     g.setColour (t.textDim);
     g.setFont (uiFont (10.0f));
-    g.drawText (juce::String (info.max) + info.unit, area.getRight() - 46, area.getY() - 2, 44, 12, juce::Justification::right);
-    g.drawText (juce::String (info.min) + info.unit, area.getRight() - 46, area.getBottom() - 10, 44, 12, juce::Justification::right);
+    if (current == Lane::Condition)
+    {
+        g.drawText (conditionName (info.max), area.getRight() - 46, area.getY() - 2, 44, 12, juce::Justification::right);
+        g.drawText ("always", area.getRight() - 46, area.getBottom() - 10, 44, 12, juce::Justification::right);
+    }
+    else
+    {
+        g.drawText (juce::String (info.max) + info.unit, area.getRight() - 46, area.getY() - 2, 44, 12, juce::Justification::right);
+        g.drawText (juce::String (info.min) + info.unit, area.getRight() - 46, area.getBottom() - 10, 44, 12, juce::Justification::right);
+    }
 }
 
 void LaneEditor::applyAt (const juce::MouseEvent& e)
@@ -171,9 +190,9 @@ void LaneEditor::applyAt (const juce::MouseEvent& e)
     {
         const int dir = step > lastStep ? 1 : -1;
         for (int i = lastStep + dir; i != step; i += dir)
-            proc.pattern.tracks[track].set (current, i, value);
+            proc.editPattern().tracks[track].set (current, i, value);
     }
-    proc.pattern.tracks[track].set (current, step, value);
+    proc.editPattern().tracks[track].set (current, step, value);
     lastStep = step;
     readout.setText (describe (step), juce::dontSendNotification);
     repaint();
@@ -197,7 +216,7 @@ void LaneEditor::mouseDoubleClick (const juce::MouseEvent& e)
     if (! barArea().expanded (0, 6).contains (e.position.toInt())) return;
     const int steps = clampT (proc.trackSettings (track).steps, 1, kMaxSteps);
     const int step  = stepAtX (barArea(), steps, e.position.x);
-    proc.pattern.tracks[track].set (current, step, laneInfo (current).def);
+    proc.editPattern().tracks[track].set (current, step, laneInfo (current).def);
     readout.setText (describe (step), juce::dontSendNotification);
     repaint();
 }

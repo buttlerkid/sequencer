@@ -8,7 +8,7 @@ namespace dy {
 struct StepData
 {
     bool active = false;
-    int  lane[static_cast<int> (Lane::Count)] = { 100, 80, 0, 100, 1, 0 };
+    int  lane[static_cast<int> (Lane::Count)] = { 100, 80, 0, 100, 1, 0, 0 };
 };
 
 using TrackSnapshot = std::array<StepData, kMaxSteps>;

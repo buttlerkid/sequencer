@@ -51,8 +51,17 @@ public:
     // ---- model
     juce::AudioProcessorValueTreeState apvts;
     ParamRefs    params;
-    PatternModel pattern;
+    std::array<PatternModel, kNumPatterns> patterns;
     Sequencer    sequencer;
+
+    // The pattern the editor works on: the one selected by the Pattern parameter.
+    // While playing it becomes the playing pattern at the next bar line.
+    int           targetPattern() const;
+    int           playingPattern() const { return currentPattern.load (std::memory_order_relaxed); }
+    bool          patternChangePending() const { return targetPattern() != playingPattern(); }
+    PatternModel& editPattern()             { return patterns[static_cast<size_t> (targetPattern())]; }
+    const PatternModel& editPattern() const { return patterns[static_cast<size_t> (targetPattern())]; }
+    void          selectPattern (int i);
 
     TrackSettings      trackSettings (int i) const { return params.tracks[static_cast<size_t> (i)].read(); }
     // Settings for the audio thread, with solo resolved into mute.
@@ -93,6 +102,7 @@ public:
     std::atomic<double> uiPpq { 0.0 };
     std::atomic<bool>   uiPlaying { false };
     std::atomic<bool>   uiInternalClock { false };
+    std::atomic<int>    midiTranspose { 0 };                     // from MIDI key follow, semitones
     std::array<std::atomic<uint32_t>, kNumTracks> hitCount {};   // note-ons emitted per track
 
     // Editor preferences persisted with the state.
@@ -103,8 +113,11 @@ public:
 
 private:
     void runSequencer (double ppqStart, int numSamples, int sampleOffset, bool playing,
-                       const GlobalSettings& g, const TrackSettingsArray& ts, juce::MidiBuffer& midi);
+                       const GlobalSettings& g, const TrackSettingsArray& ts, const PatternModel& pattern,
+                       PatternSwitch sw, juce::MidiBuffer& midi);
     void runAuditions (int numSamples, juce::MidiBuffer& midi);
+    void readIncomingMidi (juce::MidiBuffer& midi);
+    static double nextBarAtOrAfter (double ppq) { return std::ceil (ppq / 4.0 - 1e-9) * 4.0; }
 
     TrackClip makeTrackClip (int i) const;
     void applyTrackClip (int i, const TrackClip& clip);
@@ -112,6 +125,7 @@ private:
     std::vector<MidiEvent> eventScratch;
     double internalPpq = 0.0;
     double currentSampleRate = 44100.0;
+    std::atomic<int> currentPattern { 0 };
 
     std::array<juce::String, kNumTracks> trackNames;
 

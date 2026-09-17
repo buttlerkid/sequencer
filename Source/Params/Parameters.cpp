@@ -66,6 +66,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     layout.add (std::make_unique<AudioParameterFloat>  (pid (ParamIDs::masterShift),  "Master Shift",
                                                         NormalisableRange<float> (-64.0f, 64.0f, 0.5f), 0.0f,
                                                         AudioParameterFloatAttributes().withLabel ("ms")));
+    {
+        StringArray names;
+        for (int i = 0; i < kNumPatterns; ++i) names.add (String::charToString (static_cast<juce_wchar> ('A' + i)));
+        layout.add (std::make_unique<AudioParameterChoice> (pid (ParamIDs::pattern), "Pattern", names, 0));
+    }
+    layout.add (std::make_unique<AudioParameterBool>   (pid (ParamIDs::fill),         "Fill", false));
+    layout.add (std::make_unique<AudioParameterInt>    (pid (ParamIDs::humanizeTime), "Humanise Time", 0, 30, 0,
+                                                        AudioParameterIntAttributes().withLabel ("ms")));
+    layout.add (std::make_unique<AudioParameterInt>    (pid (ParamIDs::humanizeVel),  "Humanise Velocity", 0, 32, 0));
+    layout.add (std::make_unique<AudioParameterBool>   (pid (ParamIDs::midiFollow),   "MIDI Key Follow", false));
 
     for (int i = 0; i < kNumTracks; ++i)
     {
@@ -140,6 +150,11 @@ void ParamRefs::bind (juce::AudioProcessorValueTreeState& apvts)
     swingProfile = apvts.getRawParameterValue (ParamIDs::swingProfile);
     swingAmount  = apvts.getRawParameterValue (ParamIDs::swingAmount);
     masterShift  = apvts.getRawParameterValue (ParamIDs::masterShift);
+    pattern      = apvts.getRawParameterValue (ParamIDs::pattern);
+    fill         = apvts.getRawParameterValue (ParamIDs::fill);
+    humanizeTime = apvts.getRawParameterValue (ParamIDs::humanizeTime);
+    humanizeVel  = apvts.getRawParameterValue (ParamIDs::humanizeVel);
+    midiFollow   = apvts.getRawParameterValue (ParamIDs::midiFollow);
 
     for (int i = 0; i < kNumTracks; ++i)
     {
@@ -176,6 +191,9 @@ GlobalSettings ParamRefs::readGlobal() const
     g.swingProfile = asInt (swingProfile);
     g.swingAmount  = asInt (swingAmount);
     g.masterShiftMs = masterShift ? static_cast<double> (masterShift->load()) : 0.0;
+    g.fill           = asInt (fill) != 0;
+    g.humanizeTimeMs = asInt (humanizeTime);
+    g.humanizeVel    = asInt (humanizeVel);
     return g;
 }
 

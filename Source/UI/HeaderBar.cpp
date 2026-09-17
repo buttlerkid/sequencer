@@ -70,6 +70,41 @@ void MidiDragSource::mouseUp (const juce::MouseEvent& e)
     });
 }
 
+// ---------------------------------------------------------------- PatternButton
+PatternButton::PatternButton (DYSequencerProcessor& p, int i) : proc (p), index (i)
+{
+    setTooltip ("Pattern " + juce::String::charToString (static_cast<juce::juce_wchar> ('A' + i))
+                + " - click to select. While playing, the change happens at the next bar; you edit the new one meanwhile.");
+}
+
+void PatternButton::paint (juce::Graphics& g)
+{
+    const auto& t = themeOf (*this);
+    const bool target  = proc.targetPattern() == index;
+    const bool playing = proc.playingPattern() == index;
+    const bool pending = proc.patternChangePending();
+    const bool blinkOn = static_cast<int> (juce::Time::getMillisecondCounter() / 250) % 2 == 0;
+
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
+    juce::Colour fill = t.panelAlt;
+    if (target && (! pending || blinkOn)) fill = t.accent;
+    else if (hover) fill = t.panelAlt.brighter (t.isDark ? 0.12f : 0.04f);
+    g.setColour (fill);
+    g.fillRoundedRectangle (r, 4.0f);
+
+    g.setColour (playing && pending ? t.text : (target ? fill.darker (0.25f) : t.outline));
+    g.drawRoundedRectangle (r, 4.0f, playing && pending ? 1.8f : 1.0f);
+
+    g.setColour (fill == t.accent ? (t.isDark ? juce::Colour (0xff15171c) : juce::Colours::white) : t.text);
+    g.setFont (uiFont (12.5f, true));
+    g.drawText (juce::String::charToString (static_cast<juce::juce_wchar> ('A' + index)), getLocalBounds(), juce::Justification::centred);
+}
+
+void PatternButton::mouseDown (const juce::MouseEvent&)
+{
+    proc.selectPattern (index);
+}
+
 // ---------------------------------------------------------------- HeaderBar
 HeaderBar::HeaderBar (DYSequencerProcessor& p)
     : proc (p),
@@ -79,13 +114,13 @@ HeaderBar::HeaderBar (DYSequencerProcessor& p)
     addTrack.onClick = [this] { if (onAddTrack) onAddTrack(); };
     addAndMakeVisible (addTrack);
 
-    clearAll.setTooltip ("Clear the steps and lanes of every track (settings are kept)");
+    clearAll.setTooltip ("Clear the steps and lanes of every track in this pattern (settings are kept)");
     clearAll.onClick = [this]
     {
         juce::AlertWindow::showAsync (juce::MessageBoxOptions()
                                           .withIconType (juce::MessageBoxIconType::QuestionIcon)
-                                          .withTitle ("Clear all tracks?")
-                                          .withMessage ("This clears every step and lane on all 16 tracks. Track settings and names are kept.")
+                                          .withTitle ("Clear this pattern?")
+                                          .withMessage ("This clears every step and lane of all tracks in the selected pattern. Other patterns, track settings and names are kept.")
                                           .withButton ("Clear")
                                           .withButton ("Cancel")
                                           .withAssociatedComponent (this),
@@ -120,6 +155,33 @@ HeaderBar::HeaderBar (DYSequencerProcessor& p)
     addAndMakeVisible (barsLabel);
 
     addAndMakeVisible (dragSource);
+
+    for (int i = 0; i < kNumPatterns; ++i)
+        addAndMakeVisible (patternButtons.add (new PatternButton (proc, i)));
+
+    fillButton.setTooltip ("Hold for fill: steps with the Fill condition play, !Fill steps are skipped. Automatable.");
+    fillButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff4fd28a));
+    fillButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff10261a));
+    fillButton.onStateChange = [this]
+    {
+        const bool down = fillButton.isDown();
+        if (fillButton.getToggleState() != down)
+        {
+            fillButton.setToggleState (down, juce::dontSendNotification);
+            if (auto* param = proc.apvts.getParameter (ParamIDs::fill))
+            {
+                param->beginChangeGesture();
+                param->setValueNotifyingHost (down ? 1.0f : 0.0f);
+                param->endChangeGesture();
+            }
+        }
+    };
+    addAndMakeVisible (fillButton);
+
+    themeButton.setTooltip ("Toggle light / dark theme");
+    themeButton.onClick = [this] { if (onThemeToggle) onThemeToggle(); };
+    addAndMakeVisible (themeButton);
+
     refresh();
 }
 
@@ -127,6 +189,12 @@ void HeaderBar::refresh()
 {
     pasteAll.setEnabled (proc.hasPatternClip());
     addTrack.setEnabled (proc.numEnabledTracks() < kNumTracks);
+    themeButton.setButtonText (proc.uiTheme == 0 ? "Light" : "Dark");
+    // Fill may be driven by host automation
+    const bool fill = proc.params.fill->load() > 0.5f;
+    if (! fillButton.isDown() && fillButton.getToggleState() != fill)
+        fillButton.setToggleState (fill, juce::dontSendNotification);
+    for (auto* b : patternButtons) b->repaint();
 }
 
 void HeaderBar::paint (juce::Graphics& g)
@@ -140,21 +208,37 @@ void HeaderBar::paint (juce::Graphics& g)
     g.setColour (t.textDim);
     g.setFont (uiFont (10.0f));
     g.drawText ("v" DY_VERSION_STRING, 150, 0, 60, getHeight(), juce::Justification::centredLeft);
+
+    // caption over the pattern buttons
+    if (! patternButtons.isEmpty())
+    {
+        g.setFont (uiFont (9.5f, true));
+        g.drawText ("PATTERN", patternButtons[0]->getX(), 1, 80, 10, juce::Justification::centredLeft);
+    }
 }
 
 void HeaderBar::resized()
 {
     auto r = getLocalBounds().reduced (8, 11);
-    r.removeFromLeft (200);
-    addTrack.setBounds (r.removeFromLeft (110));
+    r.removeFromLeft (196);
+    addTrack.setBounds (r.removeFromLeft (104));
     r.removeFromLeft (6);
-    clearAll.setBounds (r.removeFromLeft (82));
+    clearAll.setBounds (r.removeFromLeft (76));
+    r.removeFromLeft (10);
+    copyAll.setBounds (r.removeFromLeft (74));
+    r.removeFromLeft (4);
+    pasteAll.setBounds (r.removeFromLeft (74));
     r.removeFromLeft (14);
-    copyAll.setBounds (r.removeFromLeft (80));
-    r.removeFromLeft (6);
-    pasteAll.setBounds (r.removeFromLeft (80));
 
-    dragSource.setBounds (r.removeFromRight (130));
+    auto pats = r.removeFromLeft (kNumPatterns * 28);
+    for (auto* b : patternButtons)
+        b->setBounds (pats.removeFromLeft (28).reduced (2, 0));
+    r.removeFromLeft (6);
+    fillButton.setBounds (r.removeFromLeft (52));
+
+    themeButton.setBounds (r.removeFromRight (48));
+    r.removeFromRight (6);
+    dragSource.setBounds (r.removeFromRight (124));
     r.removeFromRight (6);
     exportBars.setBounds (r.removeFromRight (54));
     barsLabel.setBounds (r.removeFromRight (34));

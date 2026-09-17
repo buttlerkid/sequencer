@@ -13,10 +13,13 @@ GlobalPanel::GlobalPanel (DYSequencerProcessor& p) : proc (p)
     setupSlider (masterShift, "Master shift", ParamIDs::masterShift, "Moves every track in time (ms). Negative = earlier.");
     masterShift.slider.textFromValueFunction = [] (double v) { return (v > 0 ? "+" : "") + juce::String (v, 1); };
     masterShift.slider.updateText();
+    setupSlider (humanTime, "Humanise time", ParamIDs::humanizeTime, "Random timing jitter per hit, +/- ms.");
+    setupSlider (humanVel,  "Humanise velocity", ParamIDs::humanizeVel, "Random velocity jitter per hit.");
 
-    themeButton.setTooltip ("Toggle light / dark theme");
-    themeButton.onClick = [this] { if (onThemeToggle) onThemeToggle(); };
-    addAndMakeVisible (themeButton);
+    midiFollow.setClickingTogglesState (true);
+    midiFollow.setTooltip ("Incoming MIDI notes transpose all Scale-mode tracks (C3 = no transposition). Drum tracks are unaffected.");
+    midiFollowAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ParamIDs::midiFollow, midiFollow);
+    addAndMakeVisible (midiFollow);
     refresh();
 }
 
@@ -46,7 +49,10 @@ void GlobalPanel::setupSlider (HSlider& s, const juce::String& caption, const ju
 
 void GlobalPanel::refresh()
 {
-    themeButton.setButtonText (proc.uiTheme == 0 ? "Light theme" : "Dark theme");
+    const bool on = proc.params.midiFollow->load() > 0.5f;
+    const int  tr = proc.midiTranspose.load();
+    midiFollow.setButtonText (on ? "MIDI key follow  " + juce::String (tr > 0 ? "+" : "") + juce::String (tr) + " st"
+                                 : "MIDI key follow");
 }
 
 void GlobalPanel::paint (juce::Graphics& g)
@@ -89,8 +95,10 @@ void GlobalPanel::resized()
     };
     placeSlider (swingAmount);
     placeSlider (masterShift);
+    placeSlider (humanTime);
+    placeSlider (humanVel);
 
-    themeButton.setBounds (r.removeFromBottom (24));
+    midiFollow.setBounds (r.removeFromBottom (24));
 }
 
 } // namespace dy

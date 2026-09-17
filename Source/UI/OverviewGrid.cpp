@@ -137,7 +137,7 @@ void TrackRowView::paint (juce::Graphics& g)
 {
     const auto& t   = themeOf (*this);
     const auto  s   = proc.trackSettings (index);
-    const auto& tm  = proc.pattern.tracks[index];
+    const auto& tm  = proc.editPattern().tracks[index];
     const int steps = clampT (s.steps, 1, kMaxSteps);
     const uint64_t mask = s.pulses > 0 ? euclidean (steps, s.pulses, s.rotate) : 0;
     const int playhead = proc.sequencer.currentStep (index);
@@ -235,8 +235,8 @@ void TrackRowView::mouseDown (const juce::MouseEvent& e)
     const int step  = stepAtX (area, columns, pos.x);
     if (step >= steps) return;
 
-    paintState = ! proc.pattern.tracks[index].isActive (step);
-    proc.pattern.tracks[index].setActive (step, paintState);
+    paintState = ! proc.editPattern().tracks[index].isActive (step);
+    proc.editPattern().tracks[index].setActive (step, paintState);
     lastPainted = step;
     if (paintState && onAudition) onAudition (index);
     repaint();
@@ -250,7 +250,7 @@ void TrackRowView::mouseDrag (const juce::MouseEvent& e)
     const int step  = stepAtX (cellArea(), columns, pos.x);
     if (step != lastPainted && step < steps)
     {
-        proc.pattern.tracks[index].setActive (step, paintState);
+        proc.editPattern().tracks[index].setActive (step, paintState);
         lastPainted = step;
         repaint();
     }

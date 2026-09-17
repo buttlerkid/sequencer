@@ -31,12 +31,12 @@ EditPanel::EditPanel (DYSequencerProcessor& p) : proc (p), lanes (p)
     addAndMakeVisible (lanes);
 
     auto steps = [this] { return proc.trackSettings (track).steps; };
-    addButton (rndSteps,  "Random steps at ~50% density",                     [this, steps] { generator.randomizeSteps (proc.pattern.tracks[track], steps(), 50); });
-    addButton (rndNotes,  "Random intervals within an octave",                [this, steps] { generator.randomizeLane (proc.pattern.tracks[track], Lane::Interval, steps(), -3, 7); });
-    addButton (arpUp,     "Fill the Interval lane with a rising arpeggio",    [this, steps] { generator.arpeggiate (proc.pattern.tracks[track], steps(), ArpMode::Up); });
-    addButton (arpDown,   "Fill the Interval lane with a falling arpeggio",   [this, steps] { generator.arpeggiate (proc.pattern.tracks[track], steps(), ArpMode::Down); });
-    addButton (arpUpDown, "Rising then falling arpeggio",                     [this, steps] { generator.arpeggiate (proc.pattern.tracks[track], steps(), ArpMode::UpDown); });
-    addButton (arpRandom, "Random chord tones",                               [this, steps] { generator.arpeggiate (proc.pattern.tracks[track], steps(), ArpMode::Random); });
+    addButton (rndSteps,  "Random steps at ~50% density",                     [this, steps] { generator.randomizeSteps (proc.editPattern().tracks[track], steps(), 50); });
+    addButton (rndNotes,  "Random intervals within an octave",                [this, steps] { generator.randomizeLane (proc.editPattern().tracks[track], Lane::Interval, steps(), -3, 7); });
+    addButton (arpUp,     "Fill the Interval lane with a rising arpeggio",    [this, steps] { generator.arpeggiate (proc.editPattern().tracks[track], steps(), ArpMode::Up); });
+    addButton (arpDown,   "Fill the Interval lane with a falling arpeggio",   [this, steps] { generator.arpeggiate (proc.editPattern().tracks[track], steps(), ArpMode::Down); });
+    addButton (arpUpDown, "Rising then falling arpeggio",                     [this, steps] { generator.arpeggiate (proc.editPattern().tracks[track], steps(), ArpMode::UpDown); });
+    addButton (arpRandom, "Random chord tones",                               [this, steps] { generator.arpeggiate (proc.editPattern().tracks[track], steps(), ArpMode::Random); });
     addButton (clearBtn,  "Clear steps and reset every lane of this track",   [this] { proc.clearTrack (track); });
     addButton (copyBtn,   "Copy this track (steps, lanes, settings, name)",   [this] { proc.copyTrack (track); refresh(); });
     addButton (pasteBtn,  "Paste into this track (keeps channel / mute / solo)", [this] { proc.pasteTrack (track); });

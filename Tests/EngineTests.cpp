@@ -465,6 +465,137 @@ static void testMacros()
     }
 }
 
+
+static void testConditions()
+{
+    std::puts ("Conditions");
+    {   // 1:2 fires on odd passes, 2:2 on even passes (absolute bar count)
+        Rig r;
+        r.pat.tracks[0].setActive (0, true);
+        r.pat.tracks[0].set (Lane::Condition, 0, Cond1of2);
+        r.pat.tracks[0].setActive (8, true);
+        r.pat.tracks[0].set (Lane::Condition, 8, Cond2of2);
+        r.run (4.0);
+        CHECK (r.countOns() == 4);
+        CHECK (hasOnNear (r, 0.0) && hasOnNear (r, 8.0));        // 1:2 on bars 1 and 3
+        CHECK (hasOnNear (r, 6.0) && hasOnNear (r, 14.0));       // 2:2 on bars 2 and 4
+        CHECK (! hasOnNear (r, 4.0) && ! hasOnNear (r, 2.0));
+    }
+    {   // 1:4 and 4:4 over 8 bars
+        Rig r;
+        r.pat.tracks[0].setActive (0, true);
+        r.pat.tracks[0].set (Lane::Condition, 0, Cond1of4);
+        r.pat.tracks[0].setActive (4, true);
+        r.pat.tracks[0].set (Lane::Condition, 4, Cond4of4);
+        r.run (8.0);
+        CHECK (r.countOns() == 4);
+        CHECK (hasOnNear (r, 0.0) && hasOnNear (r, 16.0));
+        CHECK (hasOnNear (r, 13.0) && hasOnNear (r, 29.0));
+    }
+    {   // Fill / !Fill follow the global flag
+        Rig r;
+        r.pat.tracks[0].setActive (0, true);  r.pat.tracks[0].set (Lane::Condition, 0, CondFill);
+        r.pat.tracks[0].setActive (8, true);  r.pat.tracks[0].set (Lane::Condition, 8, CondNotFill);
+        r.run (0.75);
+        CHECK (r.countOns() == 1 && hasOnNear (r, 2.0));
+        r.g.fill = true;                                       // pressed mid-bar: affects the next downbeat
+        r.run (1.25);
+        CHECK (r.countOns() == 2 && hasOnNear (r, 4.0));
+    }
+    {   // 1st fires only on the first pass after transport start
+        Rig r;
+        r.pat.tracks[0].setActive (0, true);
+        r.pat.tracks[0].set (Lane::Condition, 0, CondFirst);
+        r.run (3.0);
+        CHECK (r.countOns() == 1 && hasOnNear (r, 0.0));
+        r.ppq = 20.0;                                          // jump -> new "first" pass
+        r.run (2.0);
+        CHECK (r.countOns() == 2 && hasOnNear (r, 20.0));
+    }
+    {   // Prev / !Prev look at whether the previous step actually fired
+        Rig r;
+        for (int i = 0; i < 4; ++i) r.pat.tracks[0].setActive (i, true);
+        r.pat.tracks[0].set (Lane::Probability, 0, 0);        // step 1 never fires
+        r.pat.tracks[0].set (Lane::Condition, 1, CondPrev);   // needs step 1 -> never
+        r.pat.tracks[0].set (Lane::Condition, 2, CondNotPrev);// step 2 did not fire -> fires
+        r.pat.tracks[0].set (Lane::Condition, 3, CondPrev);   // step 3 fired -> fires
+        r.run (1.0);
+        CHECK (r.countOns() == 2);
+        CHECK (! hasOnNear (r, 0.25) && hasOnNear (r, 0.5) && hasOnNear (r, 0.75));
+    }
+}
+
+static void testPatternSwitch()
+{
+    std::puts ("Pattern switch");
+    Rig r;
+    PatternModel next;
+    r.pat.tracks[0].setActive (0, true);           // A: downbeat only
+    next.tracks[0].setActive (8, true);            // B: step 9 only
+
+    std::vector<MidiEvent> out;
+    const double pps = r.g.bpm / 60.0 / r.g.sampleRate;
+    // Two bars, switching to B at ppq 4.0, in 512-sample blocks
+    for (double ppq = 0.0; ppq < 8.0 - 1e-9; )
+    {
+        const int n = static_cast<int> (std::min<long long> (512, std::llround ((8.0 - ppq) / pps)));
+        Transport t { true, ppq, n };
+        PatternSwitch sw { &next, 4.0 };
+        r.seq.process (t, r.g, r.ts, r.pat, out, sw);
+        for (auto& e : out) r.collected.push_back (e);
+        ppq = (n == 512) ? ppq + n * pps : 8.0;
+    }
+    CHECK (r.countOns() == 2);
+    CHECK (hasOnNear (r, 0.0));      // bar 1 from A
+    CHECK (! hasOnNear (r, 4.0));    // bar 2 downbeat is B, which has no step 1
+    CHECK (hasOnNear (r, 6.0));      // B step 9 = ppq 4 + 2
+}
+
+static void testHumaniseAndTranspose()
+{
+    std::puts ("Humanise + MIDI transpose");
+    {
+        Rig r;
+        r.g.humanizeTimeMs = 20;
+        r.g.humanizeVel = 10;
+        for (int i = 0; i < 16; ++i) r.pat.tracks[0].setActive (i, true);
+        r.run (4.0);
+        CHECK (r.countOns() >= 64 && r.countOns() <= 65);     // bar-5 downbeat may be pulled in early
+        bool moved = false;
+        for (const auto& e : r.collected)
+        {
+            if (! e.noteOn) continue;
+            const double nominal = std::round (e.ppq / 0.25) * 0.25;
+            CHECK (std::abs (e.ppq - nominal) <= 20.0 * 0.002 + 1e-9);
+            if (std::abs (e.ppq - nominal) > 1e-6) moved = true;
+            CHECK (e.velocity >= 90 && e.velocity <= 110);
+        }
+        CHECK (moved);
+    }
+    {   // deterministic: two identical renders match
+        GlobalSettings g; g.humanizeTimeMs = 15; g.humanizeVel = 8;
+        TrackSettingsArray ts {}; ts[0].enabled = true; ts[0].pulses = 5; ts[0].euclidMode = EuclidOnly;
+        PatternModel pat;
+        auto a = Sequencer::renderOffline (g, ts, pat, 2);
+        auto b = Sequencer::renderOffline (g, ts, pat, 2);
+        CHECK (a.size() == b.size());
+        for (size_t i = 0; i < a.size() && i < b.size(); ++i) { CHECK_NEAR (a[i].ppq, b[i].ppq, 1e-12); CHECK (a[i].velocity == b[i].velocity); }
+    }
+    {   // MIDI transpose shifts scale-mode notes, not fixed ones
+        Rig r;
+        r.g.midiTranspose = 2;
+        r.pat.tracks[0].setActive (0, true);
+        r.run (1.0);
+        CHECK (r.collected[0].note == 50);
+        Rig f;
+        f.g.midiTranspose = 2;
+        f.ts[0].pitchMode = PitchFixed; f.ts[0].fixedNote = 36;
+        f.pat.tracks[0].setActive (0, true);
+        f.run (1.0);
+        CHECK (f.collected[0].note == 36);
+    }
+}
+
 static void testOfflineRender()
 {
     std::puts ("Offline render");
@@ -536,6 +667,9 @@ int main()
     testSequencerSwing();
     testSequencerTransport();
     testMacros();
+    testConditions();
+    testPatternSwitch();
+    testHumaniseAndTranspose();
     testOfflineRender();
     testGenerator();
 

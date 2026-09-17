@@ -14,8 +14,6 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    std::function<void()> onThemeToggle;
-
 private:
     struct Combo
     {
@@ -34,8 +32,9 @@ private:
 
     DYSequencerProcessor& proc;
     Combo key, scale, shuffle;
-    HSlider swingAmount, masterShift;
-    juce::TextButton themeButton;
+    HSlider swingAmount, masterShift, humanTime, humanVel;
+    juce::TextButton midiFollow { "MIDI key follow" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> midiFollowAtt;
 };
 
 } // namespace dy

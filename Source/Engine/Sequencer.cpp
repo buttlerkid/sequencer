@@ -11,6 +11,8 @@ void Sequencer::reset()
     for (int i = 0; i < kNumTracks; ++i)
     {
         state[i].nextK = 0;
+        state[i].firstK = 0;
+        state[i].lastFiredK = -1;
         state[i].pending.clear();
         state[i].rng.seed (static_cast<uint32_t> (7919 * (i + 1)));
         state[i].currentStep.store (-1);
@@ -20,9 +22,15 @@ void Sequencer::reset()
     expectedPpq = 0.0;
 }
 
-double Sequencer::maxOffsetPpq (const TrackSettings& s, double msToPpq)
+double Sequencer::maxOffsetPpq (const TrackSettings& s, const GlobalSettings& g, const TrackModel& model, double msToPpq)
 {
-    return kMaxTimingMs * msToPpq + 0.5 * s.division;
+    const int steps = clampT (s.steps, 1, kMaxSteps);
+    int earliest = 0;
+    for (int i = 0; i < steps; ++i)
+        earliest = std::min (earliest, model.get (Lane::Timing, i));
+
+    const double ms = -earliest + std::abs (s.shiftMs) + std::abs (g.masterShiftMs) + g.humanizeTimeMs;
+    return std::min (kMaxTimingMs, ms) * msToPpq + 0.5 * s.division;
 }
 
 void Sequencer::allNotesOff (std::vector<MidiEvent>& out, double at)
@@ -49,6 +57,26 @@ void Sequencer::noteOn (std::vector<MidiEvent>& out, double at, const Pending& p
     active.push_back ({ at + p.lengthPpq, p.channel, p.note, p.track });
 }
 
+bool Sequencer::conditionPasses (TrackState& st, int cond, int64_t k, int steps, const GlobalSettings& g) const
+{
+    switch (cond)
+    {
+        case CondAlways:  return true;
+        case CondFill:    return g.fill;
+        case CondNotFill: return ! g.fill;
+        case CondFirst:   return floorDiv (k, steps) == floorDiv (st.firstK, steps);
+        case CondPrev:    return st.lastFiredK == k - 1;
+        case CondNotPrev: return st.lastFiredK != k - 1;
+        default:
+        {
+            int a = 0, b = 0;
+            conditionRatio (cond, a, b);
+            if (b <= 0) return true;
+            return posMod (floorDiv (k, steps), b) == a - 1;
+        }
+    }
+}
+
 void Sequencer::scheduleStep (int trackIdx, int64_t k, const TrackSettings& s, const GlobalSettings& g,
                               const TrackModel& model, double msToPpq)
 {
@@ -64,9 +92,21 @@ void Sequencer::scheduleStep (int trackIdx, int64_t k, const TrackSettings& s, c
     if (! hit || s.mute)
         return;
 
+    if (! conditionPasses (st, model.get (Lane::Condition, idx), k, steps, g))
+        return;
+
     const int prob = clampT (model.get (Lane::Probability, idx) * clampT (s.probScale, 0, 100) / 100, 0, 100);
     if (prob < 100 && static_cast<int> (st.rng() % 100u) >= prob)
         return;
+
+    st.lastFiredK = k;
+
+    // Humanise: symmetric random jitter, drawn from the track's own generator so
+    // offline renders stay reproducible.
+    double humanMs = 0.0;
+    int    humanVel = 0;
+    if (g.humanizeTimeMs > 0) humanMs  = (static_cast<double> (st.rng() % 2001u) / 1000.0 - 1.0) * g.humanizeTimeMs;
+    if (g.humanizeVel > 0)    humanVel = static_cast<int> (st.rng() % static_cast<uint32_t> (2 * g.humanizeVel + 1)) - g.humanizeVel;
 
     double swing = 0.0;
     if (s.swingMode == SwingGlobal)      swing = swingOffsetSteps (g.swingProfile, g.swingAmount, k);
@@ -74,13 +114,14 @@ void Sequencer::scheduleStep (int trackIdx, int64_t k, const TrackSettings& s, c
 
     const double t = static_cast<double> (k) * s.division
                    + swing * s.division
-                   + (model.get (Lane::Timing, idx) + s.shiftMs + g.masterShiftMs) * msToPpq;
+                   + (model.get (Lane::Timing, idx) + s.shiftMs + g.masterShiftMs + humanMs) * msToPpq;
 
     const int note = s.pitchMode == PitchFixed
                        ? clampT (s.fixedNote, 0, 127)
-                       : noteForDegree (g.key, g.scale, kBaseNote, s.transpose + model.get (Lane::Interval, idx));
+                       : clampT (noteForDegree (g.key, g.scale, kBaseNote, s.transpose + model.get (Lane::Interval, idx))
+                                     + g.midiTranspose, 0, 127);
 
-    const int    vel = clampT (model.get (Lane::Velocity, idx) + s.velOffset, 1, 127);
+    const int    vel = clampT (model.get (Lane::Velocity, idx) + s.velOffset + humanVel, 1, 127);
     const int    rep = clampT (model.get (Lane::Repeats, idx) + s.repsAdd, 1, 8);
     const double sub = s.division / rep;
     const double lenPct = model.get (Lane::Length, idx) * clampT (s.lengthScale, 25, 400) / 100.0;
@@ -91,7 +132,7 @@ void Sequencer::scheduleStep (int trackIdx, int64_t k, const TrackSettings& s, c
 }
 
 void Sequencer::process (const Transport& t, const GlobalSettings& g, const TrackSettingsArray& tracks,
-                         const PatternModel& pattern, std::vector<MidiEvent>& out)
+                         const PatternModel& pattern, std::vector<MidiEvent>& out, PatternSwitch sw)
 {
     out.clear();
 
@@ -123,7 +164,9 @@ void Sequencer::process (const Transport& t, const GlobalSettings& g, const Trac
         {
             state[i].pending.clear();
             const double d = tracks[i].division;
-            state[i].nextK = static_cast<int64_t> (std::floor ((t.ppqStart - maxOffsetPpq (tracks[i], msToPpq)) / d));
+            state[i].nextK = static_cast<int64_t> (std::floor ((t.ppqStart - maxOffsetPpq (tracks[i], g, pattern.tracks[i], msToPpq)) / d));
+            state[i].firstK = static_cast<int64_t> (std::ceil (t.ppqStart / d - 1e-9));
+            state[i].lastFiredK = -1;
         }
     }
 
@@ -141,20 +184,22 @@ void Sequencer::process (const Transport& t, const GlobalSettings& g, const Trac
 
         const double d      = s.division;
         const int    steps  = clampT (s.steps, 1, kMaxSteps);
-        const double maxOff = maxOffsetPpq (s, msToPpq);
+        const double maxOff = maxOffsetPpq (s, g, pattern.tracks[i], msToPpq);
 
         // Division changed under us (or track was just enabled): put the cursor back in range.
         const double cursorPpq = static_cast<double> (st.nextK) * d;
         if (cursorPpq < t.ppqStart - maxOff - d || cursorPpq > ppqEnd + maxOff + d)
         {
             st.nextK = static_cast<int64_t> (std::floor ((t.ppqStart - maxOff) / d));
+            st.firstK = static_cast<int64_t> (std::ceil (t.ppqStart / d - 1e-9));
             st.pending.clear();
         }
 
         int guard = 0;
         while (static_cast<double> (st.nextK) * d < ppqEnd + maxOff && guard++ < 4096)
         {
-            scheduleStep (i, st.nextK, s, g, pattern.tracks[i], msToPpq);
+            const bool useNext = sw.next != nullptr && static_cast<double> (st.nextK) * d >= sw.atPpq - kBoundaryEps;
+            scheduleStep (i, st.nextK, s, g, (useNext ? *sw.next : pattern).tracks[i], msToPpq);
             ++st.nextK;
         }
 

@@ -8,12 +8,45 @@
 
 namespace dy {
 
-constexpr int kNumTracks = 16;
-constexpr int kMaxSteps  = 64;
+template <typename T>
+inline T clampT (T v, T lo, T hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+constexpr int kNumTracks   = 16;
+constexpr int kMaxSteps    = 64;
+constexpr int kNumPatterns = 8;    // pattern banks A..H
 constexpr int kBaseNote  = 48;   // C3 = scale degree 0 at transpose 0
 
 // Per-step editable lanes.
-enum class Lane : int { Velocity = 0, Length, Timing, Probability, Repeats, Interval, Count };
+enum class Lane : int { Velocity = 0, Length, Timing, Probability, Repeats, Interval, Condition, Count };
+
+// Trig conditions (Lane::Condition values).
+enum Condition : int
+{
+    CondAlways = 0,
+    Cond1of2, Cond2of2, Cond1of3, Cond2of3, Cond3of3, Cond1of4, Cond2of4, Cond3of4, Cond4of4, Cond1of8, Cond8of8,
+    CondFill, CondNotFill, CondFirst, CondPrev, CondNotPrev,
+    kNumConditions
+};
+
+inline const char* conditionName (int c)
+{
+    static const char* names[kNumConditions] = {
+        "-", "1:2", "2:2", "1:3", "2:3", "3:3", "1:4", "2:4", "3:4", "4:4", "1:8", "8:8",
+        "Fill", "!Fill", "1st", "Prev", "!Prev"
+    };
+    return names[clampT (c, 0, kNumConditions - 1)];
+}
+
+// A:B conditions as (a, b); (0, 0) for the others.
+inline void conditionRatio (int c, int& a, int& b)
+{
+    static const int table[kNumConditions][2] = {
+        { 0, 0 }, { 1, 2 }, { 2, 2 }, { 1, 3 }, { 2, 3 }, { 3, 3 }, { 1, 4 }, { 2, 4 }, { 3, 4 }, { 4, 4 }, { 1, 8 }, { 8, 8 },
+        { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }
+    };
+    a = table[clampT (c, 0, kNumConditions - 1)][0];
+    b = table[clampT (c, 0, kNumConditions - 1)][1];
+}
 
 struct LaneInfo
 {
@@ -32,6 +65,7 @@ inline const LaneInfo& laneInfo (Lane l)
         { "Probability", 0,   100, 100, false, "%"   },
         { "Repeats",     1,     8,   1, false, "x"   },
         { "Interval",  -24,    24,   0, true,  "deg" },
+        { "Condition",   0, kNumConditions - 1, 0, false, "" },
     };
     return table[static_cast<int> (l)];
 }
@@ -73,8 +107,19 @@ struct GlobalSettings
     int    swingProfile = 0;
     int    swingAmount  = 0;
     double masterShiftMs = 0.0;    // global timing offset
+    bool   fill         = false;   // Fill / !Fill conditions
+    int    humanizeTimeMs = 0;     // +/- random timing per hit
+    int    humanizeVel  = 0;       // +/- random velocity per hit
+    int    midiTranspose = 0;      // semitones added to scale-mode notes (MIDI key follow)
     double bpm          = 120.0;
     double sampleRate   = 44100.0;
+};
+
+// A pending pattern change: steps whose nominal time is >= atPpq come from `next`.
+struct PatternSwitch
+{
+    const struct PatternModel* next = nullptr;
+    double atPpq = 0.0;
 };
 
 struct Transport
@@ -98,8 +143,5 @@ struct MidiEvent
 // floor-division helpers that behave for negative numbers
 inline int64_t floorDiv (int64_t a, int64_t b) { return (a >= 0) ? a / b : -((-a + b - 1) / b); }
 inline int     posMod   (int64_t a, int b)     { int m = static_cast<int> (a % b); return m < 0 ? m + b : m; }
-
-template <typename T>
-inline T clampT (T v, T lo, T hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 } // namespace dy

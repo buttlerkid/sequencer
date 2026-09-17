@@ -13,6 +13,11 @@ namespace ParamIDs
     inline const juce::String swingProfile = "swingProfile";
     inline const juce::String swingAmount  = "swingAmount";
     inline const juce::String masterShift  = "masterShift";
+    inline const juce::String pattern      = "pattern";
+    inline const juce::String fill         = "fill";
+    inline const juce::String humanizeTime = "humanizeTime";
+    inline const juce::String humanizeVel  = "humanizeVel";
+    inline const juce::String midiFollow   = "midiFollow";
 
     // Per-track suffixes; full id is track (i, suffix)
     inline const char* const enabled      = "enabled";
@@ -89,6 +94,11 @@ struct ParamRefs
     std::atomic<float>* swingProfile = nullptr;
     std::atomic<float>* swingAmount = nullptr;
     std::atomic<float>* masterShift = nullptr;
+    std::atomic<float>* pattern = nullptr;
+    std::atomic<float>* fill = nullptr;
+    std::atomic<float>* humanizeTime = nullptr;
+    std::atomic<float>* humanizeVel = nullptr;
+    std::atomic<float>* midiFollow = nullptr;
     std::array<TrackParamRefs, kNumTracks> tracks;
 
     void bind (juce::AudioProcessorValueTreeState& apvts);
