@@ -23,14 +23,21 @@ public:
     void reset();
 
     // Appends the events for this block to `out` (cleared first). Events carry an
-    // absolute ppq; the caller converts to sample offsets. If `sw.next` is set,
-    // steps whose nominal time is at or after sw.atPpq are read from that pattern.
+    // absolute ppq; the caller converts to sample offsets. The schedule decides
+    // which pattern each step (by nominal time) is read from.
     void process (const Transport& t,
                   const GlobalSettings& g,
                   const TrackSettingsArray& tracks,
-                  const PatternModel& pattern,
-                  std::vector<MidiEvent>& out,
-                  PatternSwitch sw = {});
+                  const PatternSchedule& sched,
+                  std::vector<MidiEvent>& out);
+
+    void process (const Transport& t, const GlobalSettings& g, const TrackSettingsArray& tracks,
+                  const PatternModel& pattern, std::vector<MidiEvent>& out)
+    {
+        PatternSchedule sched;
+        sched.base = &pattern;
+        process (t, g, tracks, sched, out);
+    }
 
     // Step currently under the playhead for UI display, -1 when idle.
     int currentStep (int track) const { return state[track].currentStep.load (std::memory_order_relaxed); }
@@ -39,8 +46,16 @@ public:
     // engine instance. Probability uses a fixed seed so exports are repeatable.
     static std::vector<MidiEvent> renderOffline (const GlobalSettings& g,
                                                  const TrackSettingsArray& tracks,
-                                                 const PatternModel& pattern,
+                                                 const PatternSchedule& sched,
                                                  int bars);
+
+    static std::vector<MidiEvent> renderOffline (const GlobalSettings& g, const TrackSettingsArray& tracks,
+                                                 const PatternModel& pattern, int bars)
+    {
+        PatternSchedule sched;
+        sched.base = &pattern;
+        return renderOffline (g, tracks, sched, bars);
+    }
 
     static constexpr double kMaxTimingMs   = 192.0;  // step (64) + track shift (64) + master (64)
     static constexpr double kJumpTolerance = 0.02;   // ppq; ~10ms at 120bpm
@@ -63,6 +78,7 @@ private:
     bool conditionPasses (TrackState& st, int cond, int64_t k, int steps, const GlobalSettings& g) const;
     void scheduleStep (int trackIdx, int64_t k, const TrackSettings& s, const GlobalSettings& g,
                        const TrackModel& model, double msToPpq);
+    static int noteFor (const TrackSettings& s, const GlobalSettings& g, int degree);
     void noteOn (std::vector<MidiEvent>& out, double at, const Pending& p);
     void allNotesOff (std::vector<MidiEvent>& out, double at);
     // How far ahead of a block steps must be evaluated so that negative offsets

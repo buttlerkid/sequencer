@@ -3,6 +3,7 @@
 #include "PluginProcessor.h"
 #include "UI/Theme.h"
 #include "UI/HeaderBar.h"
+#include "UI/ChainStrip.h"
 #include "UI/OverviewGrid.h"
 #include "UI/PadsPanel.h"
 #include "UI/EditPanel.h"
@@ -41,6 +42,7 @@ private:
 
     juce::Component content;
     HeaderBar    header;
+    ChainStrip   chainStrip;
     OverviewGrid overview;
     PadsPanel    pads;
     EditPanel    edit;

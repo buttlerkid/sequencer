@@ -33,8 +33,8 @@ private:
     DYSequencerProcessor& proc;
     Combo key, scale, shuffle;
     HSlider swingAmount, masterShift, humanTime, humanVel;
-    juce::TextButton midiFollow { "MIDI key follow" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> midiFollowAtt;
+    Combo midiIn;
+    juce::Label midiReadout;
 };
 
 } // namespace dy

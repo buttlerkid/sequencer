@@ -24,7 +24,7 @@ void Sequencer::reset()
 
 double Sequencer::maxOffsetPpq (const TrackSettings& s, const GlobalSettings& g, const TrackModel& model, double msToPpq)
 {
-    const int steps = clampT (s.steps, 1, kMaxSteps);
+    const int steps = model.steps();
     int earliest = 0;
     for (int i = 0; i < steps; ++i)
         earliest = std::min (earliest, model.get (Lane::Timing, i));
@@ -77,18 +77,29 @@ bool Sequencer::conditionPasses (TrackState& st, int cond, int64_t k, int steps,
     }
 }
 
+int Sequencer::noteFor (const TrackSettings& s, const GlobalSettings& g, int degree)
+{
+    if (s.pitchMode == PitchFixed)
+        return clampT (s.fixedNote, 0, 127);
+    if (g.chordSize > 0)
+        return noteForChordDegree (g.chordNotes, g.chordSize, degree);
+    return clampT (noteForDegree (g.key, g.scale, kBaseNote, degree) + g.midiTranspose, 0, 127);
+}
+
 void Sequencer::scheduleStep (int trackIdx, int64_t k, const TrackSettings& s, const GlobalSettings& g,
                               const TrackModel& model, double msToPpq)
 {
     auto& st = state[trackIdx];
-    const int steps = clampT (s.steps, 1, kMaxSteps);
-    const int idx   = posMod (k, steps);
+    const int steps  = model.steps();
+    const int idx    = posMod (k, steps);
+    const int pulses = model.pulses();
+    const int mode   = model.euclidMode();
 
     const bool manual = model.isActive (idx);
-    const bool eu     = s.pulses > 0 && euclidHit (euclidean (steps, s.pulses, s.rotate), idx);
-    const bool hit    = s.euclidMode == EuclidOff  ? manual
-                      : s.euclidMode == EuclidAdd  ? (manual || eu)
-                                                   : eu;
+    const bool eu     = pulses > 0 && euclidHit (euclidean (steps, pulses, model.rotate()), idx);
+    const bool hit    = mode == EuclidOff  ? manual
+                      : mode == EuclidAdd  ? (manual || eu)
+                                           : eu;
     if (! hit || s.mute)
         return;
 
@@ -116,10 +127,7 @@ void Sequencer::scheduleStep (int trackIdx, int64_t k, const TrackSettings& s, c
                    + swing * s.division
                    + (model.get (Lane::Timing, idx) + s.shiftMs + g.masterShiftMs + humanMs) * msToPpq;
 
-    const int note = s.pitchMode == PitchFixed
-                       ? clampT (s.fixedNote, 0, 127)
-                       : clampT (noteForDegree (g.key, g.scale, kBaseNote, s.transpose + model.get (Lane::Interval, idx))
-                                     + g.midiTranspose, 0, 127);
+    const int note = noteFor (s, g, s.transpose + model.get (Lane::Interval, idx));
 
     const int    vel = clampT (model.get (Lane::Velocity, idx) + s.velOffset + humanVel, 1, 127);
     const int    rep = clampT (model.get (Lane::Repeats, idx) + s.repsAdd, 1, 8);
@@ -132,7 +140,7 @@ void Sequencer::scheduleStep (int trackIdx, int64_t k, const TrackSettings& s, c
 }
 
 void Sequencer::process (const Transport& t, const GlobalSettings& g, const TrackSettingsArray& tracks,
-                         const PatternModel& pattern, std::vector<MidiEvent>& out, PatternSwitch sw)
+                         const PatternSchedule& sched, std::vector<MidiEvent>& out)
 {
     out.clear();
 
@@ -156,6 +164,8 @@ void Sequencer::process (const Transport& t, const GlobalSettings& g, const Trac
     // rounding) belongs to the next block, where it lands on sample 0.
     const double emitBefore   = ppqEnd - kBoundaryEps;
     const bool   jump         = ! wasPlaying || std::abs (t.ppqStart - expectedPpq) > kJumpTolerance;
+
+    const PatternModel& pattern = sched.at (t.ppqStart);   // for lookahead / display
 
     if (jump)
     {
@@ -183,7 +193,7 @@ void Sequencer::process (const Transport& t, const GlobalSettings& g, const Trac
         }
 
         const double d      = s.division;
-        const int    steps  = clampT (s.steps, 1, kMaxSteps);
+        const int    steps  = pattern.tracks[i].steps();
         const double maxOff = maxOffsetPpq (s, g, pattern.tracks[i], msToPpq);
 
         // Division changed under us (or track was just enabled): put the cursor back in range.
@@ -198,8 +208,7 @@ void Sequencer::process (const Transport& t, const GlobalSettings& g, const Trac
         int guard = 0;
         while (static_cast<double> (st.nextK) * d < ppqEnd + maxOff && guard++ < 4096)
         {
-            const bool useNext = sw.next != nullptr && static_cast<double> (st.nextK) * d >= sw.atPpq - kBoundaryEps;
-            scheduleStep (i, st.nextK, s, g, (useNext ? *sw.next : pattern).tracks[i], msToPpq);
+            scheduleStep (i, st.nextK, s, g, sched.at (static_cast<double> (st.nextK) * d + kBoundaryEps).tracks[i], msToPpq);
             ++st.nextK;
         }
 
@@ -242,7 +251,7 @@ void Sequencer::process (const Transport& t, const GlobalSettings& g, const Trac
 }
 
 std::vector<MidiEvent> Sequencer::renderOffline (const GlobalSettings& g, const TrackSettingsArray& tracks,
-                                                 const PatternModel& pattern, int bars)
+                                                 const PatternSchedule& sched, int bars)
 {
     Sequencer seq;
     std::vector<MidiEvent> all, block;
@@ -261,7 +270,7 @@ std::vector<MidiEvent> Sequencer::renderOffline (const GlobalSettings& g, const 
     {
         t.ppqStart   = static_cast<double> (pos) * ppqPerSample;
         t.numSamples = static_cast<int> (std::min<int64_t> (blockSamples, totalSamples - pos));
-        seq.process (t, g, tracks, pattern, block);
+        seq.process (t, g, tracks, sched, block);
         for (const auto& e : block)
             if (e.ppq >= 0.0)
                 all.push_back (e);
@@ -270,7 +279,7 @@ std::vector<MidiEvent> Sequencer::renderOffline (const GlobalSettings& g, const 
 
     // Flush anything still held so every note-on has its note-off.
     t.playing = false;
-    seq.process (t, g, tracks, pattern, block);
+    seq.process (t, g, tracks, sched, block);
     for (auto& e : block)
     {
         e.ppq = lengthPpq;

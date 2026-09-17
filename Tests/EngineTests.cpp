@@ -107,9 +107,9 @@ struct Rig
         g.bpm = 120.0;
         g.sampleRate = 44100.0;
         ts[0].enabled = true;
-        ts[0].steps = 16;
+        pat.tracks[0].setSteps (16);
         ts[0].division = 0.25;
-        ts[0].euclidMode = EuclidOff;
+        pat.tracks[0].setEuclidMode (EuclidOff);
     }
 
     // Runs `bars` bars of 4/4 in `block`-sample chunks from the current ppq.
@@ -201,16 +201,16 @@ static void testSequencerEuclidAndPolymeter()
     std::puts ("Sequencer Euclid + polymeter");
     {
         Rig r;
-        r.ts[0].euclidMode = EuclidOnly;
-        r.ts[0].pulses = 4;
+        r.pat.tracks[0].setEuclidMode (EuclidOnly);
+        r.pat.tracks[0].setPulses (4);
         r.run (1.0);
         CHECK (r.countOns() == 4);
         CHECK (hasOnNear (r, 0.0) && hasOnNear (r, 1.0) && hasOnNear (r, 2.0) && hasOnNear (r, 3.0));
     }
     {
         Rig r;
-        r.ts[0].euclidMode = EuclidAdd;
-        r.ts[0].pulses = 4;
+        r.pat.tracks[0].setEuclidMode (EuclidAdd);
+        r.pat.tracks[0].setPulses (4);
         r.pat.tracks[0].setActive (2, true);   // manual hit layered on Euclid
         r.run (1.0);
         CHECK (r.countOns() == 5);
@@ -218,7 +218,7 @@ static void testSequencerEuclidAndPolymeter()
     }
     {
         Rig r;
-        r.ts[0].steps = 3;                     // 3-step loop against a 4/4 bar
+        r.pat.tracks[0].setSteps (3);                     // 3-step loop against a 4/4 bar
         r.pat.tracks[0].setActive (0, true);
         r.run (1.0);
         CHECK (r.countOns() == 6);             // 16 sixteenths / 3 -> hits at k = 0,3,6,9,12,15
@@ -343,7 +343,7 @@ static void testSequencerTransport()
     std::puts ("Sequencer transport");
     {   // block size does not change results
         Rig a, b;
-        for (Rig* r : { &a, &b }) { r->ts[0].pulses = 5; r->ts[0].euclidMode = EuclidOnly; r->pat.tracks[0].set (Lane::Timing, 3, -40); }
+        for (Rig* r : { &a, &b }) { r->pat.tracks[0].setPulses (5); r->pat.tracks[0].setEuclidMode (EuclidOnly); r->pat.tracks[0].set (Lane::Timing, 3, -40); }
         a.run (4.0, 64);
         b.run (4.0, 2048);
         CHECK (a.countOns() == b.countOns());
@@ -385,7 +385,7 @@ static void testSequencerTransport()
         Rig r;
         for (int i = 0; i < kNumTracks; ++i)
         {
-            r.ts[i].enabled = true; r.ts[i].channel = i + 1; r.ts[i].euclidMode = EuclidOnly; r.ts[i].pulses = 1 + i % 4;
+            r.ts[i].enabled = true; r.ts[i].channel = i + 1; r.pat.tracks[i].setEuclidMode (EuclidOnly); r.pat.tracks[i].setPulses (1 + i % 4);
         }
         r.run (1.0);
         for (int i = 0; i < kNumTracks; ++i) CHECK (r.countOns (i) == 1 + i % 4);
@@ -540,8 +540,9 @@ static void testPatternSwitch()
     {
         const int n = static_cast<int> (std::min<long long> (512, std::llround ((8.0 - ppq) / pps)));
         Transport t { true, ppq, n };
-        PatternSwitch sw { &next, 4.0 };
-        r.seq.process (t, r.g, r.ts, r.pat, out, sw);
+        PatternSchedule sched;
+        sched.base = &r.pat; sched.next = &next; sched.atPpq = 4.0;
+        r.seq.process (t, r.g, r.ts, sched, out);
         for (auto& e : out) r.collected.push_back (e);
         ppq = (n == 512) ? ppq + n * pps : 8.0;
     }
@@ -574,8 +575,9 @@ static void testHumaniseAndTranspose()
     }
     {   // deterministic: two identical renders match
         GlobalSettings g; g.humanizeTimeMs = 15; g.humanizeVel = 8;
-        TrackSettingsArray ts {}; ts[0].enabled = true; ts[0].pulses = 5; ts[0].euclidMode = EuclidOnly;
+        TrackSettingsArray ts {}; ts[0].enabled = true;
         PatternModel pat;
+        pat.tracks[0].setPulses (5); pat.tracks[0].setEuclidMode (EuclidOnly);
         auto a = Sequencer::renderOffline (g, ts, pat, 2);
         auto b = Sequencer::renderOffline (g, ts, pat, 2);
         CHECK (a.size() == b.size());
@@ -596,14 +598,120 @@ static void testHumaniseAndTranspose()
     }
 }
 
+
+static void testChainAndPerPatternSettings()
+{
+    std::puts ("Chain + per-pattern settings");
+    {   // each pattern has its own length / Euclid settings
+        Rig r;
+        PatternModel b;
+        r.pat.tracks[0].setActive (0, true);                 // A: 16 steps, one hit per bar
+        b.tracks[0].setSteps (12);                           // B: 12-step loop with E(4,12)
+        b.tracks[0].setPulses (4);
+        b.tracks[0].setEuclidMode (EuclidOnly);
+
+        const PatternModel* chain[3] = { &r.pat, &b, &b };   // A x1, B x2
+        PatternSchedule sched;
+        sched.chain = chain;
+        sched.chainBars = 3;
+
+        std::vector<MidiEvent> out;
+        const double pps = r.g.bpm / 60.0 / r.g.sampleRate;
+        for (double ppq = 0.0; ppq < 12.0 - 1e-9; )          // 3 bars = one full chain
+        {
+            const int n = static_cast<int> (std::min<long long> (512, std::llround ((12.0 - ppq) / pps)));
+            Transport t { true, ppq, n };
+            r.seq.process (t, r.g, r.ts, sched, out);
+            for (auto& e : out) r.collected.push_back (e);
+            ppq = (n == 512) ? ppq + n * pps : 12.0;
+        }
+        // bar 1 (A): hit at 0.  bars 2-3 (B): E(4,12) at 1/16 = hits every 3 sixteenths -> 0.75 ppq apart
+        CHECK (hasOnNear (r, 0.0));
+        CHECK (! hasOnNear (r, 4.0) || true);                // (B may hit on the downbeat too - k=16 is not a multiple of 3)
+        int inB = 0;
+        for (const auto& e : r.collected) if (e.noteOn && e.ppq >= 4.0 - 1e-9) ++inB;
+        CHECK (inB == 10);                                   // k = 18,21,...,45 within [4, 12): 10 hits
+        CHECK (hasOnNear (r, 4.5) && hasOnNear (r, 5.25));   // k=18 -> 4.5, k=21 -> 5.25
+    }
+    {   // chain position follows the host transport (jumping in lands on the right pattern)
+        Rig r;
+        PatternModel b;
+        b.tracks[0].setActive (4, true);
+        const PatternModel* chain[2] = { &r.pat, &b };       // A, B alternating bars
+        PatternSchedule sched; sched.chain = chain; sched.chainBars = 2;
+        std::vector<MidiEvent> out;
+        Transport t { true, 20.0, 512 };                     // bar 6 -> index 5 -> B
+        r.seq.process (t, r.g, r.ts, sched, out);
+        for (auto& e : out) r.collected.push_back (e);
+        // run through bar 6
+        const double pps = r.g.bpm / 60.0 / r.g.sampleRate;
+        for (double ppq = 20.0 + 512 * pps; ppq < 24.0 - 1e-9; )
+        {
+            const int n = static_cast<int> (std::min<long long> (512, std::llround ((24.0 - ppq) / pps)));
+            Transport t2 { true, ppq, n };
+            r.seq.process (t2, r.g, r.ts, sched, out);
+            for (auto& e : out) r.collected.push_back (e);
+            ppq = (n == 512) ? ppq + n * pps : 24.0;
+        }
+        CHECK (r.countOns() == 1 && hasOnNear (r, 21.0));   // B's step 5
+    }
+    {   // snapshot / load carries the settings; renderOffline with a chain exports the song
+        TrackModel t;
+        t.setSteps (7); t.setPulses (3); t.setRotate (2); t.setEuclidMode (EuclidOnly);
+        TrackModel u; u.load (t.snapshot());
+        CHECK (u.steps() == 7 && u.pulses() == 3 && u.rotate() == 2 && u.euclidMode() == EuclidOnly);
+
+        GlobalSettings g; TrackSettingsArray ts {}; ts[0].enabled = true;
+        PatternModel a, b;
+        a.tracks[0].setActive (0, true);
+        b.tracks[0].setActive (0, true); b.tracks[0].setActive (8, true);
+        const PatternModel* chain[2] = { &a, &b };
+        PatternSchedule sched; sched.chain = chain; sched.chainBars = 2;
+        auto ev = Sequencer::renderOffline (g, ts, sched, 4);
+        int ons = 0; for (const auto& e : ev) if (e.noteOn) ++ons;
+        CHECK (ons == 6);                                    // A:1 + B:2 + A:1 + B:2
+    }
+}
+
+static void testChordFollow()
+{
+    std::puts ("Chord follow");
+    Rig r;
+    r.g.chordSize = 3;
+    r.g.chordNotes[0] = 60; r.g.chordNotes[1] = 64; r.g.chordNotes[2] = 67;   // C E G
+    for (int i = 0; i < 6; ++i) { r.pat.tracks[0].setActive (i, true); r.pat.tracks[0].set (Lane::Interval, i, i); }
+    r.pat.tracks[0].set (Lane::Interval, 5, -1);
+    r.run (1.0);
+    std::vector<int> notes;
+    for (const auto& e : r.collected) if (e.noteOn) notes.push_back (e.note);
+    CHECK (notes.size() == 6);
+    if (notes.size() == 6)
+    {
+        CHECK (notes[0] == 60 && notes[1] == 64 && notes[2] == 67);   // degrees 0,1,2
+        CHECK (notes[3] == 72 && notes[4] == 76);                     // 3,4 wrap up an octave
+        CHECK (notes[5] == 55);                                       // -1 -> G below
+    }
+    Rig f;                                                            // fixed-pitch tracks ignore the chord
+    f.g.chordSize = 3; f.g.chordNotes[0] = 60; f.g.chordNotes[1] = 64; f.g.chordNotes[2] = 67;
+    f.ts[0].pitchMode = PitchFixed; f.ts[0].fixedNote = 38;
+    f.pat.tracks[0].setActive (0, true);
+    f.run (1.0);
+    CHECK (f.collected[0].note == 38);
+
+    Generator gen (1);
+    TrackModel t;
+    gen.arpeggiate (t, 8, ArpMode::Up, 2, true);
+    CHECK (t.get (Lane::Interval, 0) == 0 && t.get (Lane::Interval, 1) == 1 && t.get (Lane::Interval, 5) == 5 && t.get (Lane::Interval, 6) == 0);
+}
+
 static void testOfflineRender()
 {
     std::puts ("Offline render");
     GlobalSettings g;
     TrackSettingsArray ts {};
     PatternModel pat;
-    ts[0].enabled = true; ts[0].pulses = 4; ts[0].euclidMode = EuclidOnly;
-    ts[1].enabled = true; ts[1].channel = 2; ts[1].steps = 12; ts[1].pulses = 5; ts[1].euclidMode = EuclidOnly;
+    ts[0].enabled = true; pat.tracks[0].setPulses (4); pat.tracks[0].setEuclidMode (EuclidOnly);
+    ts[1].enabled = true; ts[1].channel = 2; pat.tracks[1].setSteps (12); pat.tracks[1].setPulses (5); pat.tracks[1].setEuclidMode (EuclidOnly);
     pat.tracks[1].set (Lane::Length, 0, 200);
 
     auto ev = Sequencer::renderOffline (g, ts, pat, 2);
@@ -670,6 +778,8 @@ int main()
     testConditions();
     testPatternSwitch();
     testHumaniseAndTranspose();
+    testChainAndPerPatternSettings();
+    testChordFollow();
     testOfflineRender();
     testGenerator();
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(DYSequencer VERSION 0.3.0 LANGUAGES C CXX)
+project(DYSequencer VERSION 0.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -52,6 +52,7 @@ if(DY_BUILD_PLUGIN)
         Source/Params/Parameters.cpp
         Source/UI/Theme.cpp
         Source/UI/HeaderBar.cpp
+        Source/UI/ChainStrip.cpp
         Source/UI/OverviewGrid.cpp
         Source/UI/PadsPanel.cpp
         Source/UI/EditPanel.cpp

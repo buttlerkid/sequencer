@@ -16,10 +16,12 @@ GlobalPanel::GlobalPanel (DYSequencerProcessor& p) : proc (p)
     setupSlider (humanTime, "Humanise time", ParamIDs::humanizeTime, "Random timing jitter per hit, +/- ms.");
     setupSlider (humanVel,  "Humanise velocity", ParamIDs::humanizeVel, "Random velocity jitter per hit.");
 
-    midiFollow.setClickingTogglesState (true);
-    midiFollow.setTooltip ("Incoming MIDI notes transpose all Scale-mode tracks (C3 = no transposition). Drum tracks are unaffected.");
-    midiFollowAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ParamIDs::midiFollow, midiFollow);
-    addAndMakeVisible (midiFollow);
+    setupCombo (midiIn, "MIDI in", midiInNames(), ParamIDs::midiIn,
+                "Off: incoming MIDI passes through. Key follow: the last note transposes Scale tracks (C3 = none). "
+                "Chord follow: held notes become the chord that the Interval lane walks through.");
+    midiReadout.setFont (uiFont (10.5f));
+    midiReadout.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (midiReadout);
     refresh();
 }
 
@@ -49,10 +51,26 @@ void GlobalPanel::setupSlider (HSlider& s, const juce::String& caption, const ju
 
 void GlobalPanel::refresh()
 {
-    const bool on = proc.params.midiFollow->load() > 0.5f;
-    const int  tr = proc.midiTranspose.load();
-    midiFollow.setButtonText (on ? "MIDI key follow  " + juce::String (tr > 0 ? "+" : "") + juce::String (tr) + " st"
-                                 : "MIDI key follow");
+    const int mode = static_cast<int> (std::lround (proc.params.midiIn->load()));
+    juce::String text;
+    if (mode == MidiInKeyFollow)
+    {
+        const int tr = proc.midiTranspose.load();
+        text = "transpose " + juce::String (tr > 0 ? "+" : "") + juce::String (tr) + " st";
+    }
+    else if (mode == MidiInChordFollow)
+    {
+        const int n = proc.uiChordSize.load();
+        if (n == 0) text = "play a chord...";
+        else
+        {
+            text = "chord: ";
+            for (int i = 0; i < n; ++i)
+                text += (i ? " " : "") + juce::MidiMessage::getMidiNoteName (proc.uiChord[static_cast<size_t> (i)].load(), true, false, 3);
+        }
+    }
+    midiReadout.setText (text, juce::dontSendNotification);
+    midiReadout.setColour (juce::Label::textColourId, themeOf (*this).textDim);
 }
 
 void GlobalPanel::paint (juce::Graphics& g)
@@ -98,7 +116,11 @@ void GlobalPanel::resized()
     placeSlider (humanTime);
     placeSlider (humanVel);
 
-    midiFollow.setBounds (r.removeFromBottom (24));
+    auto midiRow = r.removeFromBottom (36);
+    midiIn.label.setBounds (midiRow.removeFromTop (13));
+    auto boxRow = midiRow.removeFromTop (22);
+    midiIn.box.setBounds (boxRow.removeFromLeft (110));
+    midiReadout.setBounds (boxRow.withTrimmedLeft (4));
 }
 
 } // namespace dy

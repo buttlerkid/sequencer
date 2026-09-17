@@ -25,7 +25,7 @@ LaneEditor::LaneEditor (DYSequencerProcessor& p) : proc (p)
     randomButton.onClick = [this]
     {
         const auto& info = laneInfo (current);
-        const int steps = proc.trackSettings (track).steps;
+        const int steps = proc.editPattern().tracks[track].steps();
         // Keep random values musically usable: velocities and lengths stay in the upper half,
         // timing and intervals stay modest, probability spans a useful range.
         switch (current)
@@ -92,11 +92,11 @@ juce::String LaneEditor::describe (int step) const
 void LaneEditor::paint (juce::Graphics& g)
 {
     const auto& t    = themeOf (*this);
-    const auto  s    = proc.trackSettings (track);
     const auto& tm   = proc.editPattern().tracks[track];
     const auto& info = laneInfo (current);
-    const int steps  = clampT (s.steps, 1, kMaxSteps);
-    const uint64_t mask = s.pulses > 0 ? euclidean (steps, s.pulses, s.rotate) : 0;
+    const int steps  = tm.steps();
+    const uint64_t mask = tm.pulses() > 0 ? euclidean (steps, tm.pulses(), tm.rotate()) : 0;
+    const int euclidMode = tm.euclidMode();
     const int playhead = proc.sequencer.currentStep (track);
     const auto area = barArea();
 
@@ -129,7 +129,7 @@ void LaneEditor::paint (juce::Graphics& g)
 
         const bool manual = tm.isActive (i);
         const bool eu     = euclidHit (mask, i);
-        const bool fires  = s.euclidMode == EuclidOff ? manual : s.euclidMode == EuclidAdd ? (manual || eu) : eu;
+        const bool fires  = stepFires (euclidMode, manual, eu);
 
         // Ghost bar shows the full column so empty steps are still targets.
         g.setColour (t.stepOff.withAlpha (0.5f));
@@ -181,7 +181,7 @@ void LaneEditor::paint (juce::Graphics& g)
 
 void LaneEditor::applyAt (const juce::MouseEvent& e)
 {
-    const int steps = clampT (proc.trackSettings (track).steps, 1, kMaxSteps);
+    const int steps = proc.editPattern().tracks[track].steps();
     const int step  = stepAtX (barArea(), steps, e.position.x);
     const int value = valueAtY (e.position.y);
 
@@ -214,7 +214,7 @@ void LaneEditor::mouseDrag (const juce::MouseEvent& e)
 void LaneEditor::mouseDoubleClick (const juce::MouseEvent& e)
 {
     if (! barArea().expanded (0, 6).contains (e.position.toInt())) return;
-    const int steps = clampT (proc.trackSettings (track).steps, 1, kMaxSteps);
+    const int steps = proc.editPattern().tracks[track].steps();
     const int step  = stepAtX (barArea(), steps, e.position.x);
     proc.editPattern().tracks[track].set (current, step, laneInfo (current).def);
     readout.setText (describe (step), juce::dontSendNotification);
@@ -223,7 +223,7 @@ void LaneEditor::mouseDoubleClick (const juce::MouseEvent& e)
 
 void LaneEditor::mouseMove (const juce::MouseEvent& e)
 {
-    const int steps = clampT (proc.trackSettings (track).steps, 1, kMaxSteps);
+    const int steps = proc.editPattern().tracks[track].steps();
     const int step  = barArea().expanded (0, 6).contains (e.position.toInt()) ? stepAtX (barArea(), steps, e.position.x) : -1;
     if (step != hoverStep)
     {

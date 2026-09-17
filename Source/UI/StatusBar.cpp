@@ -19,9 +19,21 @@ void StatusBar::paint (juce::Graphics& g)
     juce::String transport;
     {
         const auto letter = [] (int i) { return juce::String::charToString (static_cast<juce::juce_wchar> ('A' + i)); };
-        transport = "Pattern " + letter (proc.playingPattern());
-        if (proc.patternChangePending())
-            transport += "  " + juce::String::charToString (0x2192) + " " + letter (proc.targetPattern()) + " next bar";
+        if (proc.chainEnabled())
+        {
+            int entry = 0, barInEntry = 0;
+            proc.chainPosition (entry, barInEntry);
+            const auto e = proc.chainEntry (juce::jmax (0, entry));
+            transport = "Chain " + juce::String (entry + 1) + "/" + juce::String (proc.chainSize())
+                      + "  " + letter (e.pattern) + " bar " + juce::String (barInEntry + 1) + "/" + juce::String (e.bars)
+                      + "   editing " + letter (proc.targetPattern());
+        }
+        else
+        {
+            transport = "Pattern " + letter (proc.playingPattern());
+            if (proc.patternChangePending())
+                transport += "  " + juce::String::charToString (0x2192) + " " + letter (proc.targetPattern()) + " next bar";
+        }
         transport += "     ";
     }
     transport += juce::String (proc.uiBpm.load(), 1) + " BPM   ";

@@ -41,6 +41,16 @@ inline int noteForDegree (int key, int scaleIdx, int baseNote, int degree)
     return clampT (note, 0, 127);
 }
 
+// Chord follow: degree n picks the n-th held note, wrapping into higher / lower
+// octaves. Falls back to the scale when no chord is held.
+inline int noteForChordDegree (const int* chord, int size, int degree)
+{
+    if (size <= 0) return -1;
+    const int64_t oct = floorDiv (degree, size);
+    const int     deg = posMod (degree, size);
+    return clampT (chord[deg] + static_cast<int> (oct) * 12, 0, 127);
+}
+
 // Nearest in-scale note to `note` (ties resolve downward).
 inline int quantizeToScale (int note, int key, int scaleIdx)
 {

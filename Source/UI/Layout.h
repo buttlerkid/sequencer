@@ -8,6 +8,7 @@ namespace dy {
 constexpr int kLogicalW = 1200;
 constexpr int kLogicalH = 740;
 constexpr int kHeaderH  = 48;
+constexpr int kChainH   = 30;
 constexpr int kStatusH  = 26;
 
 // Overview grid

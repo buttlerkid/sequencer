@@ -17,7 +17,8 @@ namespace ParamIDs
     inline const juce::String fill         = "fill";
     inline const juce::String humanizeTime = "humanizeTime";
     inline const juce::String humanizeVel  = "humanizeVel";
-    inline const juce::String midiFollow   = "midiFollow";
+    inline const juce::String midiIn       = "midiIn";
+    inline const juce::String chainMode    = "chainMode";
 
     // Per-track suffixes; full id is track (i, suffix)
     inline const char* const enabled      = "enabled";
@@ -57,6 +58,12 @@ juce::StringArray shuffleProfileNames();
 juce::StringArray euclidModeNames();
 juce::StringArray pitchModeNames();
 juce::StringArray swingModeNames();
+juce::StringArray midiInNames();
+
+enum MidiInMode : int { MidiInOff = 0, MidiInKeyFollow = 1, MidiInChordFollow = 2 };
+
+// Per-track parameters that mirror the edited pattern's TrackModel settings.
+bool isPatternSettingParam (const char* suffix);
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -98,7 +105,8 @@ struct ParamRefs
     std::atomic<float>* fill = nullptr;
     std::atomic<float>* humanizeTime = nullptr;
     std::atomic<float>* humanizeVel = nullptr;
-    std::atomic<float>* midiFollow = nullptr;
+    std::atomic<float>* midiIn = nullptr;
+    std::atomic<float>* chainMode = nullptr;
     std::array<TrackParamRefs, kNumTracks> tracks;
 
     void bind (juce::AudioProcessorValueTreeState& apvts);

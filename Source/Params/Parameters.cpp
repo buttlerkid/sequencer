@@ -33,6 +33,13 @@ juce::StringArray shuffleProfileNames()
 juce::StringArray euclidModeNames() { return { "Off", "Add", "Only" }; }
 juce::StringArray pitchModeNames()  { return { "Scale", "Fixed" }; }
 juce::StringArray swingModeNames()  { return { "Global", "Off", "Custom" }; }
+juce::StringArray midiInNames()     { return { "Off", "Key follow", "Chord follow" }; }
+
+bool isPatternSettingParam (const char* suffix)
+{
+    return std::strcmp (suffix, ParamIDs::steps) == 0 || std::strcmp (suffix, ParamIDs::pulses) == 0
+        || std::strcmp (suffix, ParamIDs::rotate) == 0 || std::strcmp (suffix, ParamIDs::euclidMode) == 0;
+}
 
 const std::vector<const char*>& trackParamSuffixes()
 {
@@ -75,7 +82,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     layout.add (std::make_unique<AudioParameterInt>    (pid (ParamIDs::humanizeTime), "Humanise Time", 0, 30, 0,
                                                         AudioParameterIntAttributes().withLabel ("ms")));
     layout.add (std::make_unique<AudioParameterInt>    (pid (ParamIDs::humanizeVel),  "Humanise Velocity", 0, 32, 0));
-    layout.add (std::make_unique<AudioParameterBool>   (pid (ParamIDs::midiFollow),   "MIDI Key Follow", false));
+    layout.add (std::make_unique<AudioParameterChoice> (pid (ParamIDs::midiIn),       "MIDI In", midiInNames(), MidiInOff));
+    layout.add (std::make_unique<AudioParameterBool>   (pid (ParamIDs::chainMode),    "Chain (song mode)", false));
 
     for (int i = 0; i < kNumTracks; ++i)
     {
@@ -123,11 +131,7 @@ TrackSettings TrackParamRefs::read() const
     s.enabled      = asInt (enabled) != 0;
     s.mute         = asInt (mute) != 0;
     s.channel      = asInt (channel);
-    s.steps        = asInt (steps);
     s.division     = kDivisionPpq[clampT (asInt (division), 0, kNumDivisions - 1)];
-    s.pulses       = asInt (pulses);
-    s.rotate       = asInt (rotate);
-    s.euclidMode   = asInt (euclidMode);
     s.pitchMode    = asInt (pitchMode);
     s.fixedNote    = asInt (fixedNote);
     s.transpose    = asInt (transpose);
@@ -154,7 +158,8 @@ void ParamRefs::bind (juce::AudioProcessorValueTreeState& apvts)
     fill         = apvts.getRawParameterValue (ParamIDs::fill);
     humanizeTime = apvts.getRawParameterValue (ParamIDs::humanizeTime);
     humanizeVel  = apvts.getRawParameterValue (ParamIDs::humanizeVel);
-    midiFollow   = apvts.getRawParameterValue (ParamIDs::midiFollow);
+    midiIn       = apvts.getRawParameterValue (ParamIDs::midiIn);
+    chainMode    = apvts.getRawParameterValue (ParamIDs::chainMode);
 
     for (int i = 0; i < kNumTracks; ++i)
     {

@@ -11,9 +11,16 @@ namespace dy {
 template <typename T>
 inline T clampT (T v, T lo, T hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+// floor-division helpers that behave for negative numbers
+inline int64_t floorDiv (int64_t a, int64_t b) { return (a >= 0) ? a / b : -((-a + b - 1) / b); }
+inline int     posMod   (int64_t a, int b)     { int m = static_cast<int> (a % b); return m < 0 ? m + b : m; }
+
 constexpr int kNumTracks   = 16;
 constexpr int kMaxSteps    = 64;
 constexpr int kNumPatterns = 8;    // pattern banks A..H
+constexpr int kMaxChainEntries = 16;
+constexpr int kMaxChainEntryBars = 16;
+constexpr int kMaxChainBars = kMaxChainEntries * kMaxChainEntryBars;
 constexpr int kBaseNote  = 48;   // C3 = scale degree 0 at transpose 0
 
 // Per-step editable lanes.
@@ -75,16 +82,14 @@ enum PitchMode  : int { PitchScale = 0, PitchFixed = 1 };
 enum SwingMode  : int { SwingGlobal = 0, SwingOff = 1, SwingCustom = 2 };
 
 // Snapshot of one track's host-automatable parameters for a single block.
+// Length and Euclid settings live in the pattern (see TrackModel) so each
+// pattern bank can have its own.
 struct TrackSettings
 {
     bool   enabled      = false;
     bool   mute         = false;
     int    channel      = 1;       // 1..16
-    int    steps        = 16;      // 1..64
     double division     = 0.25;    // PPQ per step (0.25 = 1/16)
-    int    pulses       = 0;       // Euclid hits, 0 = off
-    int    rotate       = 0;
-    int    euclidMode   = EuclidAdd;
     int    pitchMode    = PitchScale;
     int    fixedNote    = 36;
     int    transpose    = 0;       // scale degrees
@@ -111,15 +116,35 @@ struct GlobalSettings
     int    humanizeTimeMs = 0;     // +/- random timing per hit
     int    humanizeVel  = 0;       // +/- random velocity per hit
     int    midiTranspose = 0;      // semitones added to scale-mode notes (MIDI key follow)
+    int    chordNotes[8] = {};     // chord follow: held notes, ascending; chordSize 0 = off
+    int    chordSize    = 0;
     double bpm          = 120.0;
     double sampleRate   = 44100.0;
 };
 
-// A pending pattern change: steps whose nominal time is >= atPpq come from `next`.
-struct PatternSwitch
+struct PatternModel;
+
+// Which pattern is in effect at a given position. Either a bar-indexed chain
+// (song mode), or a base pattern with an optional switch at a bar line.
+struct PatternSchedule
 {
-    const struct PatternModel* next = nullptr;
-    double atPpq = 0.0;
+    const PatternModel* base  = nullptr;
+    const PatternModel* next  = nullptr;   // pattern-mode switch target
+    double atPpq = 0.0;                    // ...taking effect for nominal times >= atPpq
+    const PatternModel* const* chain = nullptr;   // chain mode: one pointer per bar
+    int chainBars = 0;
+
+    const PatternModel& at (double ppq) const
+    {
+        if (chain != nullptr && chainBars > 0)
+        {
+            const auto bar = static_cast<int64_t> (std::floor (ppq / 4.0 + 1e-9));
+            return *chain[posMod (bar, chainBars)];
+        }
+        if (next != nullptr && ppq >= atPpq - 1e-9)
+            return *next;
+        return *base;
+    }
 };
 
 struct Transport
@@ -139,9 +164,5 @@ struct MidiEvent
     int    track = 0;     // originating sequencer track
     int    sampleOffset = 0;
 };
-
-// floor-division helpers that behave for negative numbers
-inline int64_t floorDiv (int64_t a, int64_t b) { return (a >= 0) ? a / b : -((-a + b - 1) / b); }
-inline int     posMod   (int64_t a, int b)     { int m = static_cast<int> (a % b); return m < 0 ? m + b : m; }
 
 } // namespace dy

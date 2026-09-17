@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "Engine/Scale.h"
+#include <algorithm>
 
 namespace dy {
 
@@ -11,12 +12,37 @@ DYSequencerProcessor::DYSequencerProcessor()
     params.bind (apvts);
     eventScratch.reserve (1024);
     heldAuditions.reserve (64);
+    heldNotes.reserve (16);
 
-    // A friendly starting point: four-on-the-floor on track 1, pattern A.
+    // A friendly starting point: four-on-the-floor on track 1, pattern A; chain = A x4.
     for (int i = 0; i < 16; i += 4)
         patterns[0].tracks[0].setActive (i, true);
+    chainPatterns[0] = 0;
+    chainBars[0] = 4;
+
+    // Length / Euclid parameters are a window onto the edited pattern's settings.
+    static const char* const fields[] = { ParamIDs::steps, ParamIDs::pulses, ParamIDs::rotate, ParamIDs::euclidMode };
+    for (int i = 0; i < kNumTracks; ++i)
+        for (int f = 0; f < 4; ++f)
+        {
+            const auto id = ParamIDs::track (i, fields[f]);
+            settingParamIds[id] = { i, f };
+            apvts.addParameterListener (id, this);
+        }
+    apvts.addParameterListener (ParamIDs::pattern, this);
+
+    startTimerHz (30);
 }
 
+DYSequencerProcessor::~DYSequencerProcessor()
+{
+    stopTimer();
+    for (const auto& kv : settingParamIds)
+        apvts.removeParameterListener (kv.first, this);
+    apvts.removeParameterListener (ParamIDs::pattern, this);
+}
+
+// ------------------------------------------------------------------ pattern / settings sync
 int DYSequencerProcessor::targetPattern() const
 {
     return juce::jlimit (0, kNumPatterns - 1, static_cast<int> (std::lround (params.pattern->load())));
@@ -29,6 +55,136 @@ void DYSequencerProcessor::selectPattern (int i)
         p->beginChangeGesture();
         p->setValueNotifyingHost (p->convertTo0to1 (static_cast<float> (juce::jlimit (0, kNumPatterns - 1, i))));
         p->endChangeGesture();
+    }
+}
+
+void DYSequencerProcessor::parameterChanged (const juce::String& id, float newValue)
+{
+    if (id == ParamIDs::pattern)
+    {
+        settingsDirty.store (true);
+        return;
+    }
+    if (syncingParams) return;
+
+    const auto it = settingParamIds.find (id);
+    if (it == settingParamIds.end()) return;
+
+    auto& tm = editPattern().tracks[it->second.track];
+    const int v = static_cast<int> (std::lround (newValue));
+    switch (it->second.field)
+    {
+        case 0: tm.setSteps (v); break;
+        case 1: tm.setPulses (v); break;
+        case 2: tm.setRotate (v); break;
+        case 3: tm.setEuclidMode (v); break;
+        default: break;
+    }
+}
+
+void DYSequencerProcessor::pushPatternSettingsToParams()
+{
+    syncingParams = true;
+    static const char* const fields[] = { ParamIDs::steps, ParamIDs::pulses, ParamIDs::rotate, ParamIDs::euclidMode };
+    for (int i = 0; i < kNumTracks; ++i)
+    {
+        const auto& tm = editPattern().tracks[i];
+        const int values[] = { tm.steps(), tm.pulses(), tm.rotate(), tm.euclidMode() };
+        for (int f = 0; f < 4; ++f)
+        {
+            if (auto* p = apvts.getParameter (ParamIDs::track (i, fields[f])))
+            {
+                const float norm = p->convertTo0to1 (static_cast<float> (values[f]));
+                if (std::abs (p->getValue() - norm) > 1e-6f)
+                    p->setValueNotifyingHost (norm);
+            }
+        }
+    }
+    syncingParams = false;
+}
+
+void DYSequencerProcessor::copyParamsToAllPatternSettings()
+{
+    for (int i = 0; i < kNumTracks; ++i)
+    {
+        const auto& t = params.tracks[static_cast<size_t> (i)];
+        for (auto& p : patterns)
+        {
+            auto& tm = p.tracks[i];
+            tm.setSteps (static_cast<int> (std::lround (t.steps->load())));
+            tm.setPulses (static_cast<int> (std::lround (t.pulses->load())));
+            tm.setRotate (static_cast<int> (std::lround (t.rotate->load())));
+            tm.setEuclidMode (static_cast<int> (std::lround (t.euclidMode->load())));
+        }
+    }
+}
+
+void DYSequencerProcessor::timerCallback()
+{
+    if (settingsDirty.exchange (false))
+        pushPatternSettingsToParams();
+}
+
+// ------------------------------------------------------------------ chain
+ChainEntry DYSequencerProcessor::chainEntry (int i) const
+{
+    i = juce::jlimit (0, kMaxChainEntries - 1, i);
+    return { chainPatterns[static_cast<size_t> (i)].load(), chainBars[static_cast<size_t> (i)].load() };
+}
+
+void DYSequencerProcessor::setChainEntry (int i, ChainEntry e)
+{
+    if (i < 0 || i >= kMaxChainEntries) return;
+    chainPatterns[static_cast<size_t> (i)].store (juce::jlimit (0, kNumPatterns - 1, e.pattern));
+    chainBars[static_cast<size_t> (i)].store (juce::jlimit (1, kMaxChainEntryBars, e.bars));
+}
+
+void DYSequencerProcessor::addChainEntry()
+{
+    const int n = chainLength.load();
+    if (n >= kMaxChainEntries) return;
+    const auto last = chainEntry (juce::jmax (0, n - 1));
+    setChainEntry (n, { n > 0 ? (last.pattern + 1) % kNumPatterns : 0, last.bars });
+    chainLength.store (n + 1);
+}
+
+void DYSequencerProcessor::removeLastChainEntry()
+{
+    const int n = chainLength.load();
+    if (n > 1) chainLength.store (n - 1);
+}
+
+int DYSequencerProcessor::chainTotalBars() const
+{
+    int total = 0;
+    for (int i = 0; i < chainLength.load(); ++i) total += chainEntry (i).bars;
+    return total;
+}
+
+int DYSequencerProcessor::expandChain()
+{
+    int total = 0;
+    const int n = chainLength.load (std::memory_order_relaxed);
+    for (int i = 0; i < n && total < kMaxChainBars; ++i)
+    {
+        const auto e = chainEntry (i);
+        for (int b = 0; b < e.bars && total < kMaxChainBars; ++b)
+            barMap[static_cast<size_t> (total++)] = &patterns[static_cast<size_t> (e.pattern)];
+    }
+    return total;
+}
+
+void DYSequencerProcessor::chainPosition (int& entry, int& barInEntry) const
+{
+    entry = -1; barInEntry = 0;
+    const int total = chainTotalBars();
+    if (total <= 0) return;
+    int bar = posMod (static_cast<int64_t> (std::floor (uiPpq.load() / 4.0 + 1e-9)), total);
+    for (int i = 0; i < chainLength.load(); ++i)
+    {
+        const int bars = chainEntry (i).bars;
+        if (bar < bars) { entry = i; barInEntry = bar; return; }
+        bar -= bars;
     }
 }
 
@@ -74,11 +230,11 @@ bool DYSequencerProcessor::isBusesLayoutSupported (const BusesLayout& layouts) c
 
 // ------------------------------------------------------------------ audio
 void DYSequencerProcessor::runSequencer (double ppqStart, int numSamples, int sampleOffset, bool playing,
-                                         const GlobalSettings& g, const TrackSettingsArray& ts, const PatternModel& pattern,
-                                         PatternSwitch sw, juce::MidiBuffer& midi)
+                                         const GlobalSettings& g, const TrackSettingsArray& ts,
+                                         const PatternSchedule& sched, juce::MidiBuffer& midi)
 {
     Transport t { playing, ppqStart, numSamples };
-    sequencer.process (t, g, ts, pattern, eventScratch, sw);
+    sequencer.process (t, g, ts, sched, eventScratch);
 
     const double ppqPerSample = g.bpm / 60.0 / g.sampleRate;
     for (const auto& e : eventScratch)
@@ -96,7 +252,6 @@ void DYSequencerProcessor::runSequencer (double ppqStart, int numSamples, int sa
 
 void DYSequencerProcessor::runAuditions (int numSamples, juce::MidiBuffer& midi)
 {
-    // Release notes whose time is up.
     for (auto it = heldAuditions.begin(); it != heldAuditions.end();)
     {
         if (it->samplesLeft < numSamples)
@@ -111,7 +266,6 @@ void DYSequencerProcessor::runAuditions (int numSamples, juce::MidiBuffer& midi)
         }
     }
 
-    // Start the ones the editor queued.
     const int holdSamples = static_cast<int> (currentSampleRate * 0.18);
     int start1, size1, start2, size2;
     auditionFifo.prepareToRead (auditionFifo.getNumReady(), start1, size1, start2, size2);
@@ -139,31 +293,59 @@ void DYSequencerProcessor::runAuditions (int numSamples, juce::MidiBuffer& midi)
     auditionFifo.finishedRead (size1 + size2);
 }
 
-void DYSequencerProcessor::readIncomingMidi (juce::MidiBuffer& midi)
+void DYSequencerProcessor::readIncomingMidi (juce::MidiBuffer& midi, int mode)
 {
-    const bool follow = params.midiFollow->load() > 0.5f;
-    if (! follow) return;                 // pass incoming MIDI straight through
+    if (mode == MidiInOff) return;        // pass incoming MIDI straight through
 
     for (const auto meta : midi)
     {
         const auto m = meta.getMessage();
-        if (m.isNoteOn())
-            midiTranspose.store (juce::jlimit (-24, 24, m.getNoteNumber() - 60), std::memory_order_relaxed);
+        if (mode == MidiInKeyFollow)
+        {
+            if (m.isNoteOn())
+                midiTranspose.store (juce::jlimit (-24, 24, m.getNoteNumber() - 60), std::memory_order_relaxed);
+        }
+        else if (m.isNoteOn())
+        {
+            // A new chord starts when nothing was held; notes added while holding join it.
+            if (heldNotes.empty())
+                chordSize = 0;
+            if (std::find (heldNotes.begin(), heldNotes.end(), m.getNoteNumber()) == heldNotes.end())
+                heldNotes.push_back (m.getNoteNumber());
+
+            std::vector<int> sorted = heldNotes;            // small; audio thread cost is negligible
+            std::sort (sorted.begin(), sorted.end());
+            chordSize = juce::jmin (8, static_cast<int> (sorted.size()));
+            for (int i = 0; i < chordSize; ++i) chord[i] = sorted[static_cast<size_t> (i)];
+            for (int i = 0; i < 8; ++i) uiChord[static_cast<size_t> (i)].store (i < chordSize ? chord[i] : -1);
+            uiChordSize.store (chordSize);
+        }
+        else if (m.isNoteOff())
+        {
+            heldNotes.erase (std::remove (heldNotes.begin(), heldNotes.end(), m.getNoteNumber()), heldNotes.end());
+            // released notes stay in the latched chord until a new chord starts
+        }
     }
-    midi.clear();                         // the keyboard steers the sequencer, it does not play through
+    midi.clear();
 }
 
 void DYSequencerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
-    buffer.clear();                       // we make MIDI, not audio
+    buffer.clear();
 
     const int numSamples = buffer.getNumSamples();
-    readIncomingMidi (midi);
+    const int midiMode = static_cast<int> (std::lround (params.midiIn->load()));
+    readIncomingMidi (midi, midiMode);
 
     GlobalSettings g = params.readGlobal();
     g.sampleRate = currentSampleRate;
-    g.midiTranspose = params.midiFollow->load() > 0.5f ? midiTranspose.load (std::memory_order_relaxed) : 0;
+    g.midiTranspose = midiMode == MidiInKeyFollow ? midiTranspose.load (std::memory_order_relaxed) : 0;
+    if (midiMode == MidiInChordFollow && chordSize > 0)
+    {
+        g.chordSize = chordSize;
+        for (int i = 0; i < chordSize; ++i) g.chordNotes[i] = chord[i];
+    }
 
     double bpm = 120.0, ppq = 0.0, loopStart = 0.0, loopEnd = 0.0;
     bool playing = false, haveHostPpq = false, looping = false;
@@ -186,7 +368,6 @@ void DYSequencerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     if (! haveHostPpq)
     {
-        // No transport (standalone app): free-run so the sequencer is still usable.
         playing = true;
         ppq     = internalPpq;
     }
@@ -194,48 +375,59 @@ void DYSequencerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     g.bpm = bpm > 1.0 ? bpm : 120.0;
     const double ppqPerSample = g.bpm / 60.0 / g.sampleRate;
     const auto   ts           = allTrackSettings();
+    const double ppqEnd       = ppq + numSamples * ppqPerSample;
 
-    // Pattern change: immediate when stopped, otherwise at the next bar line.
+    // ---- which pattern plays when
     const int target  = targetPattern();
     int       current = currentPattern.load (std::memory_order_relaxed);
-    if (target != current && ! playing)
-    {
-        currentPattern.store (target, std::memory_order_relaxed);
-        current = target;
-    }
-    const bool pending = target != current;
-    const auto& cur  = patterns[static_cast<size_t> (current)];
-    const auto& next = patterns[static_cast<size_t> (target)];
+    PatternSchedule sched;
+    const bool chain = chainEnabled();
 
-    const double ppqEnd = ppq + numSamples * ppqPerSample;
-    bool switched = false;
+    if (chain)
+    {
+        const int total = expandChain();
+        sched.chain = barMap.data();
+        sched.chainBars = total;
+        sched.base = &patterns[static_cast<size_t> (target)];
+    }
+    else
+    {
+        if (target != current && ! playing)
+        {
+            currentPattern.store (target, std::memory_order_relaxed);
+            current = target;
+        }
+        sched.base = &patterns[static_cast<size_t> (current)];
+        if (target != current && playing)
+        {
+            sched.next  = &patterns[static_cast<size_t> (target)];
+            sched.atPpq = nextBarAtOrAfter (ppq);
+        }
+    }
 
     if (playing && looping && loopEnd > loopStart && ppq < loopEnd && ppqEnd > loopEnd + 1e-9)
     {
         // Hosts that do not split buffers at the loop point: play up to the loop end,
         // then continue from the loop start inside the same buffer.
         const int firstLen = juce::jlimit (0, numSamples, static_cast<int> (std::floor ((loopEnd - ppq) / ppqPerSample)));
-        const double switchAt = nextBarAtOrAfter (ppq);
-        PatternSwitch sw1 = pending ? PatternSwitch { &next, switchAt } : PatternSwitch {};
-        runSequencer (ppq, firstLen, 0, true, g, ts, cur, sw1, midi);
+        runSequencer (ppq, firstLen, 0, true, g, ts, sched, midi);
 
-        switched = pending && switchAt <= loopEnd + 1e-9;
-        const double switchAt2 = nextBarAtOrAfter (loopStart);
-        PatternSwitch sw2 = (pending && ! switched) ? PatternSwitch { &next, switchAt2 } : PatternSwitch {};
-        runSequencer (loopStart, numSamples - firstLen, firstLen, true, g, ts, switched ? next : cur, sw2, midi);
-        if (pending && ! switched)
-            switched = switchAt2 <= loopStart + (numSamples - firstLen) * ppqPerSample + 1e-9;
+        PatternSchedule sched2 = sched;
+        if (! chain && sched.next != nullptr)
+        {
+            if (sched.atPpq <= loopEnd + 1e-9) { sched2.base = sched.next; sched2.next = nullptr; }   // switched at the loop end
+            else                                 sched2.atPpq = nextBarAtOrAfter (loopStart);
+        }
+        runSequencer (loopStart, numSamples - firstLen, firstLen, true, g, ts, sched2, midi);
+        const double wrappedEnd = loopStart + (numSamples - firstLen) * ppqPerSample;
+        currentPattern.store (static_cast<int> (&sched2.at (wrappedEnd - 1e-9) - patterns.data()), std::memory_order_relaxed);
     }
     else
     {
-        const double switchAt = nextBarAtOrAfter (ppq);
-        PatternSwitch sw = (pending && playing) ? PatternSwitch { &next, switchAt } : PatternSwitch {};
-        runSequencer (ppq, numSamples, 0, playing, g, ts, cur, sw, midi);
-        switched = pending && playing && switchAt <= ppqEnd + 1e-9;
+        runSequencer (ppq, numSamples, 0, playing, g, ts, sched, midi);
+        if (playing)
+            currentPattern.store (static_cast<int> (&sched.at (ppqEnd - 1e-9) - patterns.data()), std::memory_order_relaxed);
     }
-
-    if (switched)
-        currentPattern.store (target, std::memory_order_relaxed);
 
     runAuditions (numSamples, midi);
 
@@ -265,8 +457,17 @@ int DYSequencerProcessor::trackBaseNote (int i) const
     const auto s = trackSettings (i);
     if (s.pitchMode == PitchFixed)
         return juce::jlimit (0, 127, s.fixedNote);
+    const int mode = static_cast<int> (std::lround (params.midiIn->load()));
+    if (mode == MidiInChordFollow && uiChordSize.load() > 0)
+    {
+        int c[8];
+        const int n = uiChordSize.load();
+        for (int k = 0; k < n; ++k) c[k] = uiChord[static_cast<size_t> (k)].load();
+        return noteForChordDegree (c, n, s.transpose);
+    }
     const auto g = params.readGlobal();
-    return noteForDegree (g.key, g.scale, kBaseNote, s.transpose);
+    const int tr = mode == MidiInKeyFollow ? midiTranspose.load() : 0;
+    return juce::jlimit (0, 127, noteForDegree (g.key, g.scale, kBaseNote, s.transpose) + tr);
 }
 
 juce::String DYSequencerProcessor::trackNoteName (int i) const
@@ -394,7 +595,7 @@ static std::vector<int> stringToInts (const juce::String& s)
 void DYSequencerProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::ValueTree root ("DYSequencer");
-    root.setProperty ("version", 3, nullptr);
+    root.setProperty ("version", 4, nullptr);
     root.addChild (apvts.copyState(), -1, nullptr);
 
     juce::ValueTree names ("Names");
@@ -402,6 +603,16 @@ void DYSequencerProcessor::getStateInformation (juce::MemoryBlock& destData)
         if (trackNames[static_cast<size_t> (i)].isNotEmpty())
             names.setProperty ("t" + juce::String (i), trackNames[static_cast<size_t> (i)], nullptr);
     root.addChild (names, -1, nullptr);
+
+    juce::ValueTree chainTree ("Chain");
+    for (int i = 0; i < chainLength.load(); ++i)
+    {
+        juce::ValueTree e ("Entry");
+        e.setProperty ("pattern", chainEntry (i).pattern, nullptr);
+        e.setProperty ("bars", chainEntry (i).bars, nullptr);
+        chainTree.addChild (e, -1, nullptr);
+    }
+    root.addChild (chainTree, -1, nullptr);
 
     for (int pi = 0; pi < kNumPatterns; ++pi)
     {
@@ -411,8 +622,7 @@ void DYSequencerProcessor::getStateInformation (juce::MemoryBlock& destData)
         {
             const auto& tm = patterns[static_cast<size_t> (pi)].tracks[i];
 
-            // Skip untouched tracks to keep the state small.
-            bool any = false;
+            bool any = tm.steps() != 16 || tm.pulses() != 0 || tm.rotate() != 0 || tm.euclidMode() != EuclidAdd;
             for (int s = 0; s < kMaxSteps && ! any; ++s) any = tm.isActive (s);
             for (int l = 0; l < static_cast<int> (Lane::Count) && ! any; ++l)
                 for (int s = 0; s < kMaxSteps && ! any; ++s)
@@ -421,6 +631,10 @@ void DYSequencerProcessor::getStateInformation (juce::MemoryBlock& destData)
 
             juce::ValueTree tr ("Track");
             tr.setProperty ("index", i, nullptr);
+            tr.setProperty ("steps", tm.steps(), nullptr);
+            tr.setProperty ("pulses", tm.pulses(), nullptr);
+            tr.setProperty ("rotate", tm.rotate(), nullptr);
+            tr.setProperty ("euclid", tm.euclidMode(), nullptr);
 
             std::vector<int> act (kMaxSteps);
             for (int s = 0; s < kMaxSteps; ++s) act[static_cast<size_t> (s)] = tm.isActive (s) ? 1 : 0;
@@ -455,23 +669,48 @@ void DYSequencerProcessor::setStateInformation (const void* data, int sizeInByte
 
     auto root = juce::ValueTree::fromXml (*xml);
     if (! root.isValid()) return;
+    const int version = root.getProperty ("version", 1);
 
+    syncingParams = true;                 // the parameter listener must not write into patterns while loading
     auto paramsTree = root.getChildWithName (apvts.state.getType());
     if (paramsTree.isValid())
         apvts.replaceState (paramsTree);
+    syncingParams = false;
 
     for (auto& p : patterns)
         for (auto& t : p.tracks)
+        {
             t.clear();
+            t.resetSettings();
+        }
     for (auto& n : trackNames) n.clear();
+
+    // Older sets had one global set of length / Euclid values: seed every pattern with them.
+    if (version < 4)
+        copyParamsToAllPatternSettings();
 
     auto names = root.getChildWithName ("Names");
     if (names.isValid())
         for (int i = 0; i < kNumTracks; ++i)
             trackNames[static_cast<size_t> (i)] = names.getProperty ("t" + juce::String (i), "").toString();
 
-    // v3 saves one <Pattern index=n> per bank; v2 saved a single <Pattern> (bank A)
-    // that also carried the track names.
+    auto chainTree = root.getChildWithName ("Chain");
+    if (chainTree.isValid() && chainTree.getNumChildren() > 0)
+    {
+        int n = 0;
+        for (const auto& e : chainTree)
+        {
+            if (n >= kMaxChainEntries) break;
+            setChainEntry (n++, { static_cast<int> (e.getProperty ("pattern", 0)), static_cast<int> (e.getProperty ("bars", 4)) });
+        }
+        chainLength.store (n);
+    }
+    else
+    {
+        setChainEntry (0, { 0, 4 });
+        chainLength.store (1);
+    }
+
     for (const auto& pat : root)
     {
         if (! pat.hasType ("Pattern")) continue;
@@ -485,6 +724,13 @@ void DYSequencerProcessor::setStateInformation (const void* data, int sizeInByte
 
             if (tr.hasProperty ("name"))
                 trackNames[static_cast<size_t> (i)] = tr.getProperty ("name").toString();
+            if (tr.hasProperty ("steps"))
+            {
+                tm.setSteps (tr.getProperty ("steps", 16));
+                tm.setPulses (tr.getProperty ("pulses", 0));
+                tm.setRotate (tr.getProperty ("rotate", 0));
+                tm.setEuclidMode (tr.getProperty ("euclid", EuclidAdd));
+            }
 
             const auto act = stringToInts (tr.getProperty ("active").toString());
             for (size_t s = 0; s < act.size() && s < kMaxSteps; ++s) tm.setActive (static_cast<int> (s), act[s] != 0);
@@ -498,7 +744,6 @@ void DYSequencerProcessor::setStateInformation (const void* data, int sizeInByte
             }
         }
     }
-    currentPattern.store (targetPattern(), std::memory_order_relaxed);
 
     auto ui = root.getChildWithName ("UI");
     if (ui.isValid())
@@ -508,6 +753,9 @@ void DYSequencerProcessor::setStateInformation (const void* data, int sizeInByte
         uiExportBars    = ui.getProperty ("exportBars", 4);
         uiSelectedTrack = juce::jlimit (0, kNumTracks - 1, static_cast<int> (ui.getProperty ("selectedTrack", 0)));
     }
+
+    currentPattern.store (targetPattern(), std::memory_order_relaxed);
+    settingsDirty.store (true);
 }
 
 // ------------------------------------------------------------------ clipboard
@@ -530,8 +778,8 @@ void DYSequencerProcessor::applyTrackClip (int i, const TrackClip& clip)
     size_t k = 0;
     for (auto* suffix : trackParamSuffixes())
     {
-        // Routing stays with the destination track; only musical content is pasted.
-        if (! isRoutingParam (suffix) && k < clip.params.size())
+        // Routing stays with the destination; pattern settings came with the snapshot.
+        if (! isRoutingParam (suffix) && ! isPatternSettingParam (suffix) && k < clip.params.size())
         {
             if (auto* p = apvts.getParameter (ParamIDs::track (i, suffix)))
             {
@@ -542,6 +790,7 @@ void DYSequencerProcessor::applyTrackClip (int i, const TrackClip& clip)
         }
         ++k;
     }
+    settingsDirty.store (true);
 }
 
 void DYSequencerProcessor::copyTrack (int i)  { trackClip = makeTrackClip (i); }
@@ -569,7 +818,29 @@ juce::File DYSequencerProcessor::exportMidiFile (int bars)
     g.sampleRate = currentSampleRate;
     const auto ts = allTrackSettings();
 
-    const auto events = Sequencer::renderOffline (g, ts, editPattern(), bars);
+    std::vector<MidiEvent> events;
+    if (chainEnabled())
+    {
+        // Song mode: export the whole chain once.
+        std::array<const PatternModel*, kMaxChainBars> map {};
+        int total = 0;
+        for (int i = 0; i < chainLength.load() && total < kMaxChainBars; ++i)
+        {
+            const auto e = chainEntry (i);
+            for (int b = 0; b < e.bars && total < kMaxChainBars; ++b)
+                map[static_cast<size_t> (total++)] = &patterns[static_cast<size_t> (e.pattern)];
+        }
+        PatternSchedule sched;
+        sched.chain = map.data();
+        sched.chainBars = total;
+        sched.base = &editPattern();
+        bars = total;
+        events = Sequencer::renderOffline (g, ts, sched, bars);
+    }
+    else
+    {
+        events = Sequencer::renderOffline (g, ts, editPattern(), bars);
+    }
 
     juce::MidiFile mf;
     const int tpq = 960;

@@ -97,8 +97,7 @@ void TrackRowView::refresh()
     if (! nameLabel.isBeingEdited())
         nameLabel.setText (proc.trackName (index), juce::dontSendNotification);
 
-    const auto s = proc.trackSettings (index);
-    const bool euclid = s.euclidMode != EuclidOff;
+    const bool euclid = proc.editPattern().tracks[index].euclidMode() != EuclidOff;
     pulsesBox.setEnabled (euclid);
     rotateBox.setEnabled (euclid);
     if (noteMode == PitchScale) noteBox.updateText();   // key / scale may have changed
@@ -138,8 +137,9 @@ void TrackRowView::paint (juce::Graphics& g)
     const auto& t   = themeOf (*this);
     const auto  s   = proc.trackSettings (index);
     const auto& tm  = proc.editPattern().tracks[index];
-    const int steps = clampT (s.steps, 1, kMaxSteps);
-    const uint64_t mask = s.pulses > 0 ? euclidean (steps, s.pulses, s.rotate) : 0;
+    const int steps = tm.steps();
+    const uint64_t mask = tm.pulses() > 0 ? euclidean (steps, tm.pulses(), tm.rotate()) : 0;
+    const int euclidMode = tm.euclidMode();
     const int playhead = proc.sequencer.currentStep (index);
     const bool soloed  = proc.anyTrackSoloed();
     const bool silenced = s.mute || (soloed && ! s.solo);
@@ -185,10 +185,10 @@ void TrackRowView::paint (juce::Graphics& g)
 
         const bool manual = tm.isActive (i);
         const bool eu     = euclidHit (mask, i);
-        const bool fires  = stepFires (s.euclidMode, manual, eu);
+        const bool fires  = stepFires (euclidMode, manual, eu);
 
         juce::Colour fill = t.stepOff;
-        if (s.euclidMode == EuclidOnly)  fill = eu ? t.stepEuclid : t.stepOff;
+        if (euclidMode == EuclidOnly)    fill = eu ? t.stepEuclid : t.stepOff;
         else if (manual && eu)           fill = t.stepBoth;
         else if (manual)                 fill = t.stepOn;
         else if (eu)                     fill = t.stepEuclid;
@@ -197,7 +197,7 @@ void TrackRowView::paint (juce::Graphics& g)
         g.setColour (fill);
         g.fillRoundedRectangle (cell, 2.0f);
 
-        if (s.euclidMode == EuclidOnly && manual && ! eu)
+        if (euclidMode == EuclidOnly && manual && ! eu)
         {
             g.setColour (t.stepOn.withAlpha (0.5f));
             g.drawRoundedRectangle (cell.reduced (1.0f), 2.0f, 1.0f);
@@ -231,7 +231,7 @@ void TrackRowView::mouseDown (const juce::MouseEvent& e)
     const auto area = cellArea();
     if (! area.expanded (0, 3).contains (pos.toInt())) return;
 
-    const int steps = clampT (proc.trackSettings (index).steps, 1, kMaxSteps);
+    const int steps = proc.editPattern().tracks[index].steps();
     const int step  = stepAtX (area, columns, pos.x);
     if (step >= steps) return;
 
@@ -246,7 +246,7 @@ void TrackRowView::mouseDrag (const juce::MouseEvent& e)
 {
     if (e.eventComponent != this || lastPainted < 0) return;
     const auto pos = e.getEventRelativeTo (this).position;
-    const int steps = clampT (proc.trackSettings (index).steps, 1, kMaxSteps);
+    const int steps = proc.editPattern().tracks[index].steps();
     const int step  = stepAtX (cellArea(), columns, pos.x);
     if (step != lastPainted && step < steps)
     {
@@ -332,8 +332,7 @@ int OverviewGrid::computeColumns() const
     int maxSteps = 16;
     for (int i = 0; i < kNumTracks; ++i)
     {
-        const auto s = proc.trackSettings (i);
-        if (s.enabled) maxSteps = juce::jmax (maxSteps, s.steps);
+        if (proc.isTrackEnabled (i)) maxSteps = juce::jmax (maxSteps, proc.editPattern().tracks[i].steps());
     }
     return ((maxSteps + 15) / 16) * 16;
 }

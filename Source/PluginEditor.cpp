@@ -7,17 +7,18 @@ DYSequencerEditor::DYSequencerEditor (DYSequencerProcessor& p)
     : AudioProcessorEditor (p),
       proc (p),
       lookAndFeel (p.uiTheme == 0 ? Theme::dark() : Theme::light()),
-      header (p), overview (p), pads (p), edit (p), global (p), status (p)
+      header (p), chainStrip (p), overview (p), pads (p), edit (p), global (p), status (p)
 {
     setLookAndFeel (&lookAndFeel);
 
     addAndMakeVisible (content);
-    for (auto* c : std::initializer_list<juce::Component*> { &header, &overview, &pads, &edit, &global, &status })
+    for (auto* c : std::initializer_list<juce::Component*> { &header, &chainStrip, &overview, &pads, &edit, &global, &status })
         content.addAndMakeVisible (c);
 
     auto hint = [this] (const juce::String& h) { status.setHint (h); };
-    overview.onHint = hint;
-    edit.onHint     = hint;
+    overview.onHint   = hint;
+    edit.onHint       = hint;
+    chainStrip.onHint = hint;
 
     header.onAddTrack = [this]
     {
@@ -121,13 +122,15 @@ void DYSequencerEditor::layoutPanels()
     header.setBounds (r.removeFromTop (kHeaderH));
     status.setBounds (r.removeFromBottom (kStatusH));
     r = r.reduced (8, 0).withTrimmedBottom (4);
+    chainStrip.setBounds (r.removeFromTop (kChainH));
+    r.removeFromTop (6);
 
     lastOverviewHeight = overview.preferredHeight();
     overview.setBounds (r.removeFromTop (lastOverviewHeight));
     r.removeFromTop (8);
 
     auto left = r.removeFromLeft (250);
-    pads.setBounds (left.removeFromTop (juce::jmin (270, left.getHeight() * 46 / 100)));
+    pads.setBounds (left.removeFromTop (juce::jmin (250, left.getHeight() * 44 / 100)));
     left.removeFromTop (8);
     global.setBounds (left);
     r.removeFromLeft (8);
@@ -150,6 +153,7 @@ void DYSequencerEditor::timerCallback()
     edit.refresh();
     header.refresh();
     global.refresh();
+    chainStrip.refresh();
     status.repaint();
 }
 

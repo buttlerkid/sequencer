@@ -32,12 +32,17 @@ public:
 
     // Writes chord-tone intervals (root, 3rd, 5th, then the next octave) across all
     // `steps`, so whichever steps end up firing (manual or Euclid) trace an arpeggio.
-    void arpeggiate (TrackModel& t, int steps, ArpMode mode, int octaves = 2)
+    // In chord-follow mode Interval indexes the held chord, so consecutive degrees
+    // are used instead of scale thirds.
+    void arpeggiate (TrackModel& t, int steps, ArpMode mode, int octaves = 2, bool chordFollow = false)
     {
         std::vector<int> seq;
-        for (int o = 0; o < clampT (octaves, 1, 3); ++o)
-            for (int c : { 0, 2, 4 })
-                seq.push_back (c + o * 7);
+        if (chordFollow)
+            for (int i = 0; i < 3 * clampT (octaves, 1, 3); ++i) seq.push_back (i);
+        else
+            for (int o = 0; o < clampT (octaves, 1, 3); ++o)
+                for (int c : { 0, 2, 4 })
+                    seq.push_back (c + o * 7);
 
         if (mode == ArpMode::Down)
             std::reverse (seq.begin(), seq.end());
