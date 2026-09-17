@@ -3,7 +3,7 @@
 A 16-track Euclidean / scale-aware MIDI step sequencer as a VST3 (and standalone
 app), built with JUCE. Designed for Ableton Live but works in any VST3 host.
 
-![v0.2 dark theme](docs/screenshot-v0.2-dark.png)
+![v0.3 dark theme](docs/screenshot-v0.3-dark.png)
 
 ## Features
 
@@ -27,17 +27,31 @@ app), built with JUCE. Designed for Ableton Live but works in any VST3 host.
   **Layout** presets assign all 16 notes at once: GM Drums, Chromatic from C1
   (Ableton Drum Rack), or Melodic.
 
-**Per step** (six lanes): Velocity, Length (5–200 %), Timing (±64 ms),
-Probability, Repeats (1–8 ratchets), Interval (±24 degrees). Drag to draw, sweep
-horizontally to paint, double-click to reset.
+**Patterns A–H**: eight banks of step data for the whole sequencer. Selecting a
+pattern while playing switches at the **next bar line** (instantly when stopped);
+until then you are already editing the new one. The pattern is a host
+parameter, so Live can automate the arrangement. Copy All / Paste All moves a
+pattern between banks.
+
+**Per step** (seven lanes): Velocity, Length (5–200 %), Timing (±64 ms),
+Probability, Repeats (1–8 ratchets), Interval (±24 degrees) and **Condition**:
+`1:2 … 4:4, 1:8, 8:8` (play on the n-th pass of m), `Fill` / `!Fill` (the header
+**FILL** button, hold it — automatable), `1st` (first pass after play / jump),
+`Prev` / `!Prev` (did the previous step fire). Drag to draw, sweep horizontally
+to paint, double-click to reset.
 
 **Lane macros** per track — knobs that offset a whole lane on top of the step
 values: Velocity ±64, Length 25–400 %, Shift ±64 ms, Prob 0–100 %, Reps +0–7,
 Interval (transpose). All host-automatable.
 
 **Groove**: 8 shuffle profiles (Classic, Shuffle, Lazy, Push, Lean, Drunk, Roll,
-Half-Time), global amount, per-track *Global / Off / Custom*, and a **Master
-shift** (±64 ms) for the whole sequencer.
+Half-Time), global amount, per-track *Global / Off / Custom*, a **Master shift**
+(±64 ms) for the whole sequencer, and **Humanise** (random timing up to ±30 ms
+and velocity up to ±32 per hit, reproducible in exports).
+
+**MIDI key follow**: with it on, notes played into the plugin transpose every
+Scale-mode track (C3 = no transposition; drum tracks are unaffected) — play the
+sequencer's key from a keyboard or a clip.
 
 **Generators**: random steps, random notes, arpeggio up / down / up-down /
 random, per-lane randomise and reset. **Clear all** with confirmation.
@@ -45,8 +59,8 @@ random, per-lane randomise and reset. **Clear all** with confirmation.
 **Workflow**: copy / paste a track or the whole pattern (destination keeps its
 channel / on / mute / solo); **Export MIDI** — drag the button onto a DAW track
 to drop a multi-track `.mid` (1–16 bars), or click it to save a file. Resizable
-50 %–400 %, dark and light themes, tooltips everywhere. 325 automatable
-parameters; per-step data, names and UI preferences are saved with the plugin
+50 %–400 %, dark and light themes, tooltips everywhere. 330 automatable
+parameters; all eight patterns, names and UI preferences are saved with the plugin
 state.
 
 **Timing**: sample-accurate PPQ transport sync, loop-point aware, deterministic
@@ -93,8 +107,9 @@ First configure downloads JUCE 9.0.2 into `build/_deps`.
 ```
 
 The engine (`Source/Engine`) has no JUCE dependency and is covered by
-`Tests/EngineTests.cpp` (1,765 checks: Euclid, scales, swing, lanes, macros,
-timing, transport jumps, block-size independence, offline render).
+`Tests/EngineTests.cpp` (2,019 checks: Euclid, scales, swing, lanes, macros,
+conditions, pattern switching, humanise, timing, transport jumps, block-size
+independence, offline render).
 
 ## Project layout
 
@@ -117,16 +132,19 @@ scripts/        build.ps1, install.ps1, package.ps1, shot.ps1, click.ps1, lclick
 
 Each track keeps a cursor over an absolute step timeline `k · division` (PPQ).
 Per block the engine schedules every step whose nominal time falls before
-`blockEnd + maxOffset` (swing + up to 192 ms of step / track / master shift),
-computes its real time and emits it once that time lands inside a block. Steps
-already in the past after a transport jump are dropped rather than played late.
-Note-offs are tracked in PPQ; stopping the transport releases everything.
+`blockEnd + lookahead`, where the lookahead is exactly what the track's negative
+offsets need (earliest Timing value, shift, master shift, humanise, half a step
+for push-swing), so Fill, conditions and pattern switches react as late as
+possible. Steps already in the past after a transport jump are dropped rather
+than played late. A pending pattern switch is applied per step: nominal times at
+or after the bar line read the new pattern. Note-offs are tracked in PPQ;
+stopping the transport releases everything.
 
 ## Roadmap ideas
 
-- Pattern banks per track with quantised switching
-- Incoming MIDI → live transposition / scale root, chord-follow
-- Per-step conditions (1:2, 1:4, fill), humanise
+- Pattern chains / song mode, per-pattern length and Euclid settings
+- Chord follow (held chord defines the degrees), scale detection from MIDI in
+- Per-track swing-to-grid nudge, step-level ratchet curves
 - Push / Launchpad grid control
 - macOS / AU build (the CMake project is already cross-platform)
 
