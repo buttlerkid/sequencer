@@ -64,7 +64,7 @@ void Sequencer::scheduleStep (int trackIdx, int64_t k, const TrackSettings& s, c
     if (! hit || s.mute)
         return;
 
-    const int prob = model.get (Lane::Probability, idx);
+    const int prob = clampT (model.get (Lane::Probability, idx) * clampT (s.probScale, 0, 100) / 100, 0, 100);
     if (prob < 100 && static_cast<int> (st.rng() % 100u) >= prob)
         return;
 
@@ -74,16 +74,17 @@ void Sequencer::scheduleStep (int trackIdx, int64_t k, const TrackSettings& s, c
 
     const double t = static_cast<double> (k) * s.division
                    + swing * s.division
-                   + model.get (Lane::Timing, idx) * msToPpq;
+                   + (model.get (Lane::Timing, idx) + s.shiftMs + g.masterShiftMs) * msToPpq;
 
     const int note = s.pitchMode == PitchFixed
                        ? clampT (s.fixedNote, 0, 127)
                        : noteForDegree (g.key, g.scale, kBaseNote, s.transpose + model.get (Lane::Interval, idx));
 
-    const int    vel = clampT (model.get (Lane::Velocity, idx), 1, 127);
-    const int    rep = clampT (model.get (Lane::Repeats, idx), 1, 8);
+    const int    vel = clampT (model.get (Lane::Velocity, idx) + s.velOffset, 1, 127);
+    const int    rep = clampT (model.get (Lane::Repeats, idx) + s.repsAdd, 1, 8);
     const double sub = s.division / rep;
-    const double len = std::max (0.01, model.get (Lane::Length, idx) / 100.0 * sub);
+    const double lenPct = model.get (Lane::Length, idx) * clampT (s.lengthScale, 25, 400) / 100.0;
+    const double len = std::max (0.01, lenPct / 100.0 * sub);
 
     for (int j = 0; j < rep; ++j)
         st.pending.push_back ({ t + j * sub, clampT (s.channel, 1, 16), note, vel, len, trackIdx });

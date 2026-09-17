@@ -12,6 +12,7 @@ namespace ParamIDs
     inline const juce::String scale        = "scale";
     inline const juce::String swingProfile = "swingProfile";
     inline const juce::String swingAmount  = "swingAmount";
+    inline const juce::String masterShift  = "masterShift";
 
     // Per-track suffixes; full id is track (i, suffix)
     inline const char* const enabled      = "enabled";
@@ -28,6 +29,12 @@ namespace ParamIDs
     inline const char* const swingMode    = "swingMode";
     inline const char* const swingProfileT = "swingProfile";
     inline const char* const swingAmountT  = "swingAmount";
+    inline const char* const solo         = "solo";
+    inline const char* const shift        = "shift";
+    inline const char* const velOffset    = "velOffset";
+    inline const char* const lengthScale  = "lengthScale";
+    inline const char* const probScale    = "probScale";
+    inline const char* const repsAdd      = "repsAdd";
 
     inline juce::String track (int index, const char* suffix)
     {
@@ -65,6 +72,12 @@ struct TrackParamRefs
     std::atomic<float>* swingMode = nullptr;
     std::atomic<float>* swingProfile = nullptr;
     std::atomic<float>* swingAmount = nullptr;
+    std::atomic<float>* solo = nullptr;
+    std::atomic<float>* shift = nullptr;
+    std::atomic<float>* velOffset = nullptr;
+    std::atomic<float>* lengthScale = nullptr;
+    std::atomic<float>* probScale = nullptr;
+    std::atomic<float>* repsAdd = nullptr;
 
     TrackSettings read() const;
 };
@@ -75,6 +88,7 @@ struct ParamRefs
     std::atomic<float>* scale = nullptr;
     std::atomic<float>* swingProfile = nullptr;
     std::atomic<float>* swingAmount = nullptr;
+    std::atomic<float>* masterShift = nullptr;
     std::array<TrackParamRefs, kNumTracks> tracks;
 
     void bind (juce::AudioProcessorValueTreeState& apvts);
@@ -83,5 +97,8 @@ struct ParamRefs
 
 // All per-track parameter ids, in a stable order (used by copy / paste).
 const std::vector<const char*>& trackParamSuffixes();
+
+// Routing parameters stay with the destination track on paste.
+bool isRoutingParam (const char* suffix);
 
 } // namespace dy

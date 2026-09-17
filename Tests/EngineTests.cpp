@@ -397,6 +397,74 @@ static void testSequencerTransport()
     }
 }
 
+
+static void testMacros()
+{
+    std::puts ("Track macros + shift");
+    {   // velocity offset and clamp
+        Rig r;
+        r.ts[0].velOffset = 40;
+        r.pat.tracks[0].setActive (0, true);
+        r.pat.tracks[0].set (Lane::Velocity, 0, 100);
+        r.run (1.0);
+        CHECK (r.collected[0].noteOn && r.collected[0].velocity == 127);
+        Rig q;
+        q.ts[0].velOffset = -64;
+        q.pat.tracks[0].setActive (0, true);
+        q.pat.tracks[0].set (Lane::Velocity, 0, 10);
+        q.run (1.0);
+        CHECK (q.collected[0].noteOn && q.collected[0].velocity == 1);
+    }
+    {   // length scale doubles the gate: 80% * 200% = 160% of a 1/16 = 0.4 ppq
+        Rig r;
+        r.ts[0].lengthScale = 200;
+        r.pat.tracks[0].setActive (0, true);
+        r.run (1.0);
+        bool off = false;
+        for (const auto& e : r.collected) if (! e.noteOn && std::abs (e.ppq - 0.4) < 1e-6) off = true;
+        CHECK (off);
+    }
+    {   // probability scale 0 silences, 100 leaves alone
+        Rig r;
+        r.ts[0].probScale = 0;
+        for (int i = 0; i < 16; ++i) r.pat.tracks[0].setActive (i, true);
+        r.run (1.0);
+        CHECK (r.countOns() == 0);
+    }
+    {   // repeats add
+        Rig r;
+        r.ts[0].repsAdd = 3;
+        r.pat.tracks[0].setActive (0, true);
+        r.run (1.0);
+        CHECK (r.countOns() == 4);
+    }
+    {   // track shift + master shift + step timing all add up
+        Rig r;
+        r.ts[0].shiftMs = -30.0;
+        r.g.masterShiftMs = -20.0;
+        r.pat.tracks[0].setActive (4, true);
+        r.pat.tracks[0].set (Lane::Timing, 4, -14);
+        r.run (1.0);
+        CHECK (r.countOns() == 1);
+        CHECK (hasOnNear (r, 1.0 - 64.0 * 0.002, 1e-6));   // -64ms total at 120bpm
+        Rig q;
+        q.ts[0].shiftMs = 64.0;
+        q.g.masterShiftMs = 64.0;
+        q.pat.tracks[0].setActive (0, true);
+        q.pat.tracks[0].set (Lane::Timing, 0, 64);
+        q.run (1.0);
+        CHECK (hasOnNear (q, 192.0 * 0.002, 1e-6));          // +192ms lookahead still lands
+    }
+    {   // negative shift on the very first step is dropped at transport start (in the past), later loops fire
+        Rig r;
+        r.ts[0].shiftMs = -64.0;
+        r.pat.tracks[0].setActive (0, true);
+        r.run (2.0);
+        CHECK (r.countOns() == 2);                          // ppq 0 dropped; 4.0 and 8.0 pulled earlier
+        CHECK (hasOnNear (r, 4.0 - 0.128) && hasOnNear (r, 8.0 - 0.128));
+    }
+}
+
 static void testOfflineRender()
 {
     std::puts ("Offline render");
@@ -467,6 +535,7 @@ int main()
     testSequencerLanes();
     testSequencerSwing();
     testSequencerTransport();
+    testMacros();
     testOfflineRender();
     testGenerator();
 

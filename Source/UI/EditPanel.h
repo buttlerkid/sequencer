@@ -1,23 +1,26 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "PluginProcessor.h"
+#include "LaneEditor.h"
+#include "Theme.h"
 #include "Engine/Generator.h"
 
 namespace dy {
 
-// Parameter controls and generators for the selected track.
-class TrackPanel : public juce::Component
+// Everything about the selected track that is not in its overview row:
+// settings, lane editor, lane macros, generators.
+class EditPanel : public juce::Component
 {
 public:
-    explicit TrackPanel (DYSequencerProcessor& p);
+    explicit EditPanel (DYSequencerProcessor& p);
 
-    void setTrack (int i);
-    void refresh();   // enable/disable pitch controls etc.
+    void setTrack (int i);       // -1 = nothing selected
+    void refresh();
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    std::function<void()> onPatternChanged;   // generators / paste touched step data
+    std::function<void()> onPatternChanged;
     std::function<void (const juce::String&)> onHint;
 
 private:
@@ -37,13 +40,22 @@ private:
     void setupKnob (Knob&, const juce::String& caption, const juce::String& tip);
     void setupCombo (Combo&, const juce::String& caption, const juce::StringArray& items, const juce::String& tip);
     void addButton (juce::TextButton&, const juce::String& tip, std::function<void()> action);
+    void setControlsVisible (bool);
 
     DYSequencerProcessor& proc;
     Generator generator;
-    int track = 0;
+    int track = -1;
 
-    Knob  steps, pulses, rotate, transpose, fixedNote, swingAmount;
     Combo division, euclidMode, pitchMode, channel, swingMode, swingProfile;
+    struct Box
+    {
+        ValueBox    box;
+        juce::Label label;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
+    } swingAmount;
+    Knob  velMacro, lengthMacro, shiftMacro, probMacro, repsMacro, transposeMacro;
+
+    LaneEditor lanes;
 
     juce::TextButton rndSteps { "Rnd Steps" }, rndNotes { "Rnd Notes" },
                      arpUp { "Arp Up" }, arpDown { "Arp Down" }, arpUpDown { "Arp Up/Dn" }, arpRandom { "Arp Rnd" },

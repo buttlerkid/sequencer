@@ -8,12 +8,15 @@
 namespace dy {
 
 // Clipboard payload for one track: step data plus its automatable parameters
-// (as normalised values, in trackParamSuffixes() order).
+// (as normalised values, in trackParamSuffixes() order) and its name.
 struct TrackClip
 {
     TrackSnapshot steps;
     std::vector<float> params;
+    juce::String name;
 };
+
+enum class PadLayout : int { GmDrums = 0, ChromaticC1, Melodic };
 
 class DYSequencerProcessor : public juce::AudioProcessor
 {
@@ -52,7 +55,25 @@ public:
     Sequencer    sequencer;
 
     TrackSettings      trackSettings (int i) const { return params.tracks[static_cast<size_t> (i)].read(); }
+    // Settings for the audio thread, with solo resolved into mute.
     TrackSettingsArray allTrackSettings() const;
+    bool anyTrackSoloed() const;
+
+    // ---- track management (message thread)
+    juce::String trackName (int i) const;                 // never empty
+    void setTrackName (int i, const juce::String& name);
+    juce::String trackNoteName (int i) const;             // "C1" for fixed, "C3" root for scale mode
+    int  trackBaseNote (int i) const;                     // the note interval 0 plays
+    bool isTrackEnabled (int i) const { return trackSettings (i).enabled; }
+    int  numEnabledTracks() const;
+    int  addTrack();                                      // enables the first free track, returns its index or -1
+    void removeTrack (int i);                             // disables it (content is kept)
+    void setBoolParam (int i, const char* suffix, bool value);
+    void applyPadLayout (PadLayout layout);
+    void clearAll();
+
+    // Send one note of the given track right away (works with the transport stopped).
+    void audition (int i);
 
     // ---- clipboard (message thread)
     void copyTrack (int i);
@@ -72,6 +93,7 @@ public:
     std::atomic<double> uiPpq { 0.0 };
     std::atomic<bool>   uiPlaying { false };
     std::atomic<bool>   uiInternalClock { false };
+    std::array<std::atomic<uint32_t>, kNumTracks> hitCount {};   // note-ons emitted per track
 
     // Editor preferences persisted with the state.
     int   uiTheme = 0;        // 0 dark, 1 light
@@ -82,6 +104,7 @@ public:
 private:
     void runSequencer (double ppqStart, int numSamples, int sampleOffset, bool playing,
                        const GlobalSettings& g, const TrackSettingsArray& ts, juce::MidiBuffer& midi);
+    void runAuditions (int numSamples, juce::MidiBuffer& midi);
 
     TrackClip makeTrackClip (int i) const;
     void applyTrackClip (int i, const TrackClip& clip);
@@ -89,6 +112,14 @@ private:
     std::vector<MidiEvent> eventScratch;
     double internalPpq = 0.0;
     double currentSampleRate = 44100.0;
+
+    std::array<juce::String, kNumTracks> trackNames;
+
+    struct AuditionNote { int channel, note, velocity; };
+    juce::AbstractFifo auditionFifo { 64 };
+    std::array<AuditionNote, 64> auditionSlots {};
+    struct HeldAudition { int channel, note, samplesLeft; };
+    std::vector<HeldAudition> heldAuditions;
 
     std::optional<TrackClip> trackClip;
     std::optional<std::array<TrackClip, kNumTracks>> patternClip;

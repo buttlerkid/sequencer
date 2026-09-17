@@ -24,12 +24,9 @@ void StatusBar::paint (juce::Graphics& g)
 
     g.drawText (transport, r.removeFromRight (280).reduced (8, 0), juce::Justification::centredRight);
 
-    g.setColour (t.textDim.withAlpha (0.7f));
-    g.drawText ("v" DY_VERSION_STRING, r.removeFromRight (60), juce::Justification::centred);
-
     g.setColour (t.textDim);
     g.drawText (hint.isNotEmpty() ? hint
-                                  : juce::String ("Click steps to toggle. Drag lanes to shape. Drag the MIDI button onto a track to export."),
+                                  : juce::String ("Click steps to toggle, drag to paint. Click a pad to audition. Double-click a name to rename. Drag Export MIDI onto a track."),
                 r.reduced (8, 0), juce::Justification::centredLeft);
 }
 

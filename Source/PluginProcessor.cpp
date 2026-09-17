@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Engine/Scale.h"
 
 namespace dy {
 
@@ -9,17 +10,36 @@ DYSequencerProcessor::DYSequencerProcessor()
 {
     params.bind (apvts);
     eventScratch.reserve (1024);
+    heldAuditions.reserve (64);
 
     // A friendly starting point: four-on-the-floor on track 1.
     for (int i = 0; i < 16; i += 4)
         pattern.tracks[0].setActive (i, true);
 }
 
+// ------------------------------------------------------------------ settings
+bool DYSequencerProcessor::anyTrackSoloed() const
+{
+    for (int i = 0; i < kNumTracks; ++i)
+    {
+        const auto& t = params.tracks[static_cast<size_t> (i)];
+        if (t.enabled->load() > 0.5f && t.solo->load() > 0.5f)
+            return true;
+    }
+    return false;
+}
+
 TrackSettingsArray DYSequencerProcessor::allTrackSettings() const
 {
     TrackSettingsArray ts;
+    const bool solo = anyTrackSoloed();
     for (int i = 0; i < kNumTracks; ++i)
-        ts[static_cast<size_t> (i)] = trackSettings (i);
+    {
+        auto s = trackSettings (i);
+        if (solo && ! s.solo)
+            s.mute = true;
+        ts[static_cast<size_t> (i)] = s;
+    }
     return ts;
 }
 
@@ -28,6 +48,7 @@ void DYSequencerProcessor::prepareToPlay (double sampleRate, int)
     currentSampleRate = sampleRate;
     sequencer.reset();
     internalPpq = 0.0;
+    heldAuditions.clear();
 }
 
 bool DYSequencerProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -36,6 +57,7 @@ bool DYSequencerProcessor::isBusesLayoutSupported (const BusesLayout& layouts) c
     return out == juce::AudioChannelSet::stereo() || out == juce::AudioChannelSet::mono() || out.isDisabled();
 }
 
+// ------------------------------------------------------------------ audio
 void DYSequencerProcessor::runSequencer (double ppqStart, int numSamples, int sampleOffset, bool playing,
                                          const GlobalSettings& g, const TrackSettingsArray& ts, juce::MidiBuffer& midi)
 {
@@ -51,7 +73,54 @@ void DYSequencerProcessor::runSequencer (double ppqStart, int numSamples, int sa
         midi.addEvent (e.noteOn ? juce::MidiMessage::noteOn (e.channel, e.note, static_cast<juce::uint8> (e.velocity))
                                 : juce::MidiMessage::noteOff (e.channel, e.note),
                        off);
+        if (e.noteOn)
+            hitCount[static_cast<size_t> (juce::jlimit (0, kNumTracks - 1, e.track))].fetch_add (1, std::memory_order_relaxed);
     }
+}
+
+void DYSequencerProcessor::runAuditions (int numSamples, juce::MidiBuffer& midi)
+{
+    // Release notes whose time is up.
+    for (auto it = heldAuditions.begin(); it != heldAuditions.end();)
+    {
+        if (it->samplesLeft < numSamples)
+        {
+            midi.addEvent (juce::MidiMessage::noteOff (it->channel, it->note), juce::jmax (0, it->samplesLeft));
+            it = heldAuditions.erase (it);
+        }
+        else
+        {
+            it->samplesLeft -= numSamples;
+            ++it;
+        }
+    }
+
+    // Start the ones the editor queued.
+    const int holdSamples = static_cast<int> (currentSampleRate * 0.18);
+    int start1, size1, start2, size2;
+    auditionFifo.prepareToRead (auditionFifo.getNumReady(), start1, size1, start2, size2);
+    auto take = [&] (int start, int size)
+    {
+        for (int i = 0; i < size; ++i)
+        {
+            const auto& a = auditionSlots[static_cast<size_t> (start + i)];
+            for (auto it = heldAuditions.begin(); it != heldAuditions.end();)
+            {
+                if (it->channel == a.channel && it->note == a.note)
+                {
+                    midi.addEvent (juce::MidiMessage::noteOff (a.channel, a.note), 0);
+                    it = heldAuditions.erase (it);
+                }
+                else
+                    ++it;
+            }
+            midi.addEvent (juce::MidiMessage::noteOn (a.channel, a.note, static_cast<juce::uint8> (a.velocity)), 0);
+            heldAuditions.push_back ({ a.channel, a.note, holdSamples });
+        }
+    };
+    take (start1, size1);
+    take (start2, size2);
+    auditionFifo.finishedRead (size1 + size2);
 }
 
 void DYSequencerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -108,6 +177,8 @@ void DYSequencerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         runSequencer (ppq, numSamples, 0, playing, g, ts, midi);
     }
 
+    runAuditions (numSamples, midi);
+
     if (! haveHostPpq)
         internalPpq += numSamples * ppqPerSample;
 
@@ -115,6 +186,128 @@ void DYSequencerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     uiPpq.store (ppq);
     uiPlaying.store (playing);
     uiInternalClock.store (! haveHostPpq);
+}
+
+// ------------------------------------------------------------------ tracks
+juce::String DYSequencerProcessor::trackName (int i) const
+{
+    const auto& n = trackNames[static_cast<size_t> (juce::jlimit (0, kNumTracks - 1, i))];
+    return n.isNotEmpty() ? n : "Track " + juce::String (i + 1);
+}
+
+void DYSequencerProcessor::setTrackName (int i, const juce::String& name)
+{
+    trackNames[static_cast<size_t> (juce::jlimit (0, kNumTracks - 1, i))] = name.trim().substring (0, 24);
+}
+
+int DYSequencerProcessor::trackBaseNote (int i) const
+{
+    const auto s = trackSettings (i);
+    if (s.pitchMode == PitchFixed)
+        return juce::jlimit (0, 127, s.fixedNote);
+    const auto g = params.readGlobal();
+    return noteForDegree (g.key, g.scale, kBaseNote, s.transpose);
+}
+
+juce::String DYSequencerProcessor::trackNoteName (int i) const
+{
+    return juce::MidiMessage::getMidiNoteName (trackBaseNote (i), true, true, 3);
+}
+
+int DYSequencerProcessor::numEnabledTracks() const
+{
+    int n = 0;
+    for (int i = 0; i < kNumTracks; ++i) if (isTrackEnabled (i)) ++n;
+    return n;
+}
+
+void DYSequencerProcessor::setBoolParam (int i, const char* suffix, bool value)
+{
+    if (auto* p = apvts.getParameter (ParamIDs::track (i, suffix)))
+    {
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (value ? 1.0f : 0.0f);
+        p->endChangeGesture();
+    }
+}
+
+int DYSequencerProcessor::addTrack()
+{
+    for (int i = 0; i < kNumTracks; ++i)
+    {
+        if (! isTrackEnabled (i))
+        {
+            setBoolParam (i, ParamIDs::enabled, true);
+            return i;
+        }
+    }
+    return -1;
+}
+
+void DYSequencerProcessor::removeTrack (int i)
+{
+    setBoolParam (i, ParamIDs::enabled, false);
+    setBoolParam (i, ParamIDs::solo, false);
+}
+
+void DYSequencerProcessor::applyPadLayout (PadLayout layout)
+{
+    struct Pad { int note; const char* name; };
+    static const Pad gm[kNumTracks] = {
+        { 36, "Kick" },   { 38, "Snare" },   { 42, "HH Closed" }, { 46, "HH Open" },
+        { 39, "Clap" },   { 37, "Rim" },     { 41, "Tom Lo" },    { 45, "Tom Mid" },
+        { 48, "Tom Hi" }, { 49, "Crash" },   { 51, "Ride" },      { 56, "Cowbell" },
+        { 54, "Tamb" },   { 70, "Shaker" },  { 75, "Clave" },     { 44, "HH Pedal" },
+    };
+
+    for (int i = 0; i < kNumTracks; ++i)
+    {
+        auto* pitch = apvts.getParameter (ParamIDs::track (i, ParamIDs::pitchMode));
+        auto* note  = apvts.getParameter (ParamIDs::track (i, ParamIDs::fixedNote));
+        if (pitch == nullptr || note == nullptr) continue;
+
+        auto set = [] (juce::RangedAudioParameter* p, float plain)
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (p->convertTo0to1 (plain));
+            p->endChangeGesture();
+        };
+
+        switch (layout)
+        {
+            case PadLayout::GmDrums:
+                set (pitch, static_cast<float> (PitchFixed));
+                set (note, static_cast<float> (gm[i].note));
+                trackNames[static_cast<size_t> (i)] = gm[i].name;
+                break;
+            case PadLayout::ChromaticC1:
+                set (pitch, static_cast<float> (PitchFixed));
+                set (note, static_cast<float> (36 + i));
+                break;
+            case PadLayout::Melodic:
+                set (pitch, static_cast<float> (PitchScale));
+                break;
+        }
+    }
+}
+
+void DYSequencerProcessor::clearAll()
+{
+    for (auto& t : pattern.tracks)
+        t.clear();
+}
+
+void DYSequencerProcessor::audition (int i)
+{
+    const auto s = trackSettings (i);
+    int start1, size1, start2, size2;
+    auditionFifo.prepareToWrite (1, start1, size1, start2, size2);
+    if (size1 > 0)
+    {
+        auditionSlots[static_cast<size_t> (start1)] = { juce::jlimit (1, 16, s.channel), trackBaseNote (i),
+                                                        juce::jlimit (1, 127, 100 + s.velOffset) };
+        auditionFifo.finishedWrite (1);
+    }
 }
 
 // ------------------------------------------------------------------ state
@@ -141,7 +334,7 @@ static std::vector<int> stringToInts (const juce::String& s)
 void DYSequencerProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::ValueTree root ("DYSequencer");
-    root.setProperty ("version", 1, nullptr);
+    root.setProperty ("version", 2, nullptr);
     root.addChild (apvts.copyState(), -1, nullptr);
 
     juce::ValueTree pat ("Pattern");
@@ -150,6 +343,8 @@ void DYSequencerProcessor::getStateInformation (juce::MemoryBlock& destData)
         const auto& tm = pattern.tracks[i];
         juce::ValueTree tr ("Track");
         tr.setProperty ("index", i, nullptr);
+        if (trackNames[static_cast<size_t> (i)].isNotEmpty())
+            tr.setProperty ("name", trackNames[static_cast<size_t> (i)], nullptr);
 
         std::vector<int> act (kMaxSteps);
         for (int s = 0; s < kMaxSteps; ++s) act[static_cast<size_t> (s)] = tm.isActive (s) ? 1 : 0;
@@ -197,6 +392,8 @@ void DYSequencerProcessor::setStateInformation (const void* data, int sizeInByte
             if (i < 0 || i >= kNumTracks) continue;
             auto& tm = pattern.tracks[i];
 
+            trackNames[static_cast<size_t> (i)] = tr.getProperty ("name", "").toString();
+
             const auto act = stringToInts (tr.getProperty ("active").toString());
             for (size_t s = 0; s < act.size() && s < kMaxSteps; ++s) tm.setActive (static_cast<int> (s), act[s] != 0);
 
@@ -224,6 +421,7 @@ TrackClip DYSequencerProcessor::makeTrackClip (int i) const
 {
     TrackClip c;
     c.steps = pattern.tracks[i].snapshot();
+    c.name  = trackNames[static_cast<size_t> (i)];
     for (auto* suffix : trackParamSuffixes())
         if (auto* p = apvts.getParameter (ParamIDs::track (i, suffix)))
             c.params.push_back (p->getValue());
@@ -233,15 +431,13 @@ TrackClip DYSequencerProcessor::makeTrackClip (int i) const
 void DYSequencerProcessor::applyTrackClip (int i, const TrackClip& clip)
 {
     pattern.tracks[i].load (clip.steps);
+    trackNames[static_cast<size_t> (i)] = clip.name;
 
     size_t k = 0;
     for (auto* suffix : trackParamSuffixes())
     {
         // Routing stays with the destination track; only musical content is pasted.
-        const bool routing = std::strcmp (suffix, ParamIDs::enabled) == 0
-                          || std::strcmp (suffix, ParamIDs::mute) == 0
-                          || std::strcmp (suffix, ParamIDs::channel) == 0;
-        if (! routing && k < clip.params.size())
+        if (! isRoutingParam (suffix) && k < clip.params.size())
         {
             if (auto* p = apvts.getParameter (ParamIDs::track (i, suffix)))
             {
@@ -296,7 +492,7 @@ juce::File DYSequencerProcessor::exportMidiFile (int bars)
         if (! ts[static_cast<size_t> (i)].enabled) continue;
 
         juce::MidiMessageSequence seq;
-        seq.addEvent (juce::MidiMessage::textMetaEvent (3, "Track " + juce::String (i + 1)), 0.0);
+        seq.addEvent (juce::MidiMessage::textMetaEvent (3, trackName (i)), 0.0);
         for (const auto& e : events)
         {
             if (e.track != i) continue;

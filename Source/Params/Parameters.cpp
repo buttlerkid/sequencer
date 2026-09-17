@@ -1,6 +1,7 @@
 #include "Parameters.h"
 #include "Engine/Scale.h"
 #include "Engine/Shuffle.h"
+#include <cstring>
 
 namespace dy {
 
@@ -38,9 +39,16 @@ const std::vector<const char*>& trackParamSuffixes()
     static const std::vector<const char*> s {
         ParamIDs::enabled, ParamIDs::mute, ParamIDs::channel, ParamIDs::steps, ParamIDs::division,
         ParamIDs::pulses, ParamIDs::rotate, ParamIDs::euclidMode, ParamIDs::pitchMode, ParamIDs::fixedNote,
-        ParamIDs::transpose, ParamIDs::swingMode, ParamIDs::swingProfileT, ParamIDs::swingAmountT
+        ParamIDs::transpose, ParamIDs::swingMode, ParamIDs::swingProfileT, ParamIDs::swingAmountT,
+        ParamIDs::solo, ParamIDs::shift, ParamIDs::velOffset, ParamIDs::lengthScale, ParamIDs::probScale, ParamIDs::repsAdd
     };
     return s;
+}
+
+bool isRoutingParam (const char* suffix)
+{
+    return std::strcmp (suffix, ParamIDs::enabled) == 0 || std::strcmp (suffix, ParamIDs::mute) == 0
+        || std::strcmp (suffix, ParamIDs::solo) == 0    || std::strcmp (suffix, ParamIDs::channel) == 0;
 }
 
 static juce::ParameterID pid (const juce::String& id) { return { id, 1 }; }
@@ -55,6 +63,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     layout.add (std::make_unique<AudioParameterChoice> (pid (ParamIDs::swingProfile), "Swing Profile", shuffleProfileNames(), 0));
     layout.add (std::make_unique<AudioParameterInt>    (pid (ParamIDs::swingAmount),  "Swing Amount",  0, 100, 0,
                                                         AudioParameterIntAttributes().withLabel ("%")));
+    layout.add (std::make_unique<AudioParameterFloat>  (pid (ParamIDs::masterShift),  "Master Shift",
+                                                        NormalisableRange<float> (-64.0f, 64.0f, 0.5f), 0.0f,
+                                                        AudioParameterFloatAttributes().withLabel ("ms")));
 
     for (int i = 0; i < kNumTracks; ++i)
     {
@@ -78,6 +89,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         group->addChild (std::make_unique<AudioParameterChoice> (id (ParamIDs::swingProfileT), prefix + "Swing Profile", shuffleProfileNames(), 0));
         group->addChild (std::make_unique<AudioParameterInt>    (id (ParamIDs::swingAmountT),  prefix + "Swing Amount",  0, 100, 50,
                                                                  AudioParameterIntAttributes().withLabel ("%")));
+        group->addChild (std::make_unique<AudioParameterBool>   (id (ParamIDs::solo),       prefix + "Solo",      false));
+        group->addChild (std::make_unique<AudioParameterFloat>  (id (ParamIDs::shift),      prefix + "Shift",
+                                                                 NormalisableRange<float> (-64.0f, 64.0f, 0.5f), 0.0f,
+                                                                 AudioParameterFloatAttributes().withLabel ("ms")));
+        group->addChild (std::make_unique<AudioParameterInt>    (id (ParamIDs::velOffset),  prefix + "Velocity Macro", -64, 64, 0));
+        group->addChild (std::make_unique<AudioParameterInt>    (id (ParamIDs::lengthScale), prefix + "Length Macro",  25, 400, 100,
+                                                                 AudioParameterIntAttributes().withLabel ("%")));
+        group->addChild (std::make_unique<AudioParameterInt>    (id (ParamIDs::probScale),  prefix + "Probability Macro", 0, 100, 100,
+                                                                 AudioParameterIntAttributes().withLabel ("%")));
+        group->addChild (std::make_unique<AudioParameterInt>    (id (ParamIDs::repsAdd),    prefix + "Repeats Macro", 0, 7, 0));
         layout.add (std::move (group));
     }
 
@@ -103,6 +124,12 @@ TrackSettings TrackParamRefs::read() const
     s.swingMode    = asInt (swingMode);
     s.swingProfile = asInt (swingProfile);
     s.swingAmount  = asInt (swingAmount);
+    s.solo         = asInt (solo) != 0;
+    s.shiftMs      = shift ? static_cast<double> (shift->load()) : 0.0;
+    s.velOffset    = asInt (velOffset);
+    s.lengthScale  = asInt (lengthScale);
+    s.probScale    = asInt (probScale);
+    s.repsAdd      = asInt (repsAdd);
     return s;
 }
 
@@ -112,6 +139,7 @@ void ParamRefs::bind (juce::AudioProcessorValueTreeState& apvts)
     scale        = apvts.getRawParameterValue (ParamIDs::scale);
     swingProfile = apvts.getRawParameterValue (ParamIDs::swingProfile);
     swingAmount  = apvts.getRawParameterValue (ParamIDs::swingAmount);
+    masterShift  = apvts.getRawParameterValue (ParamIDs::masterShift);
 
     for (int i = 0; i < kNumTracks; ++i)
     {
@@ -131,6 +159,12 @@ void ParamRefs::bind (juce::AudioProcessorValueTreeState& apvts)
         t.swingMode    = get (ParamIDs::swingMode);
         t.swingProfile = get (ParamIDs::swingProfileT);
         t.swingAmount  = get (ParamIDs::swingAmountT);
+        t.solo         = get (ParamIDs::solo);
+        t.shift        = get (ParamIDs::shift);
+        t.velOffset    = get (ParamIDs::velOffset);
+        t.lengthScale  = get (ParamIDs::lengthScale);
+        t.probScale    = get (ParamIDs::probScale);
+        t.repsAdd      = get (ParamIDs::repsAdd);
     }
 }
 
@@ -141,6 +175,7 @@ GlobalSettings ParamRefs::readGlobal() const
     g.scale        = asInt (scale);
     g.swingProfile = asInt (swingProfile);
     g.swingAmount  = asInt (swingAmount);
+    g.masterShiftMs = masterShift ? static_cast<double> (masterShift->load()) : 0.0;
     return g;
 }
 

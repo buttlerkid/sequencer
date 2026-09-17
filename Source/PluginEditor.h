@@ -3,16 +3,21 @@
 #include "PluginProcessor.h"
 #include "UI/Theme.h"
 #include "UI/HeaderBar.h"
-#include "UI/TrackList.h"
-#include "UI/TrackPanel.h"
-#include "UI/StepGrid.h"
-#include "UI/LaneEditor.h"
+#include "UI/OverviewGrid.h"
+#include "UI/PadsPanel.h"
+#include "UI/EditPanel.h"
+#include "UI/GlobalPanel.h"
 #include "UI/StatusBar.h"
 
 namespace dy {
 
 // The editor lays everything out at a fixed logical size and scales the whole
 // tree with an AffineTransform, so any window size from 50% to 400% works.
+//
+//   header
+//   overview grid (all tracks, grows with the track count, scrolls past 10)
+//   pads | edit panel (selected track) | global
+//   status bar
 class DYSequencerEditor : public juce::AudioProcessorEditor,
                           private juce::Timer
 {
@@ -25,6 +30,7 @@ public:
 
 private:
     void timerCallback() override;
+    void layoutPanels();
     void selectTrack (int i);
     void applyTheme();
     void patternChanged();
@@ -34,14 +40,15 @@ private:
     juce::TooltipWindow tooltips { this, 600 };
 
     juce::Component content;
-    HeaderBar   header;
-    TrackList   trackList;
-    TrackPanel  trackPanel;
-    StepGrid    grid;
-    LaneEditor  lanes;
-    StatusBar   status;
+    HeaderBar    header;
+    OverviewGrid overview;
+    PadsPanel    pads;
+    EditPanel    edit;
+    GlobalPanel  global;
+    StatusBar    status;
 
-    int selectedTrack = 0;
+    int selectedTrack = -1;
+    int lastOverviewHeight = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DYSequencerEditor)
 };

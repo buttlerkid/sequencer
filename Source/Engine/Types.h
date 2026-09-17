@@ -57,6 +57,13 @@ struct TrackSettings
     int    swingMode    = SwingGlobal;
     int    swingProfile = 0;
     int    swingAmount  = 50;      // 0..100
+    bool   solo         = false;   // resolved into `mute` by the host layer
+    double shiftMs      = 0.0;     // whole-track timing offset
+    // Lane macros: applied on top of every step's own value.
+    int    velOffset    = 0;       // -64..64
+    int    lengthScale  = 100;     // 25..400 %
+    int    probScale    = 100;     // 0..100 %
+    int    repsAdd      = 0;       // 0..7
 };
 
 struct GlobalSettings
@@ -65,6 +72,7 @@ struct GlobalSettings
     int    scale        = 0;
     int    swingProfile = 0;
     int    swingAmount  = 0;
+    double masterShiftMs = 0.0;    // global timing offset
     double bpm          = 120.0;
     double sampleRate   = 44100.0;
 };

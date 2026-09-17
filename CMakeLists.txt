@@ -1,9 +1,14 @@
 cmake_minimum_required(VERSION 3.22)
-project(DYSequencer VERSION 0.1.0 LANGUAGES C CXX)
+project(DYSequencer VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+
+# Static MSVC runtime: the plugin then has no dependency on the VC++ redistributable.
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 option(DY_BUILD_PLUGIN "Build the VST3 / Standalone plugin (fetches JUCE)" ON)
 option(DY_BUILD_TESTS  "Build the engine unit tests (no JUCE needed)"       ON)
@@ -47,9 +52,10 @@ if(DY_BUILD_PLUGIN)
         Source/Params/Parameters.cpp
         Source/UI/Theme.cpp
         Source/UI/HeaderBar.cpp
-        Source/UI/TrackList.cpp
-        Source/UI/TrackPanel.cpp
-        Source/UI/StepGrid.cpp
+        Source/UI/OverviewGrid.cpp
+        Source/UI/PadsPanel.cpp
+        Source/UI/EditPanel.cpp
+        Source/UI/GlobalPanel.cpp
         Source/UI/LaneEditor.cpp
         Source/UI/StatusBar.cpp)
 

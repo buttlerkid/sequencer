@@ -7,31 +7,49 @@ DYSequencerEditor::DYSequencerEditor (DYSequencerProcessor& p)
     : AudioProcessorEditor (p),
       proc (p),
       lookAndFeel (p.uiTheme == 0 ? Theme::dark() : Theme::light()),
-      header (p), trackList (p), trackPanel (p), grid (p), lanes (p), status (p)
+      header (p), overview (p), pads (p), edit (p), global (p), status (p)
 {
     setLookAndFeel (&lookAndFeel);
 
     addAndMakeVisible (content);
-    content.addAndMakeVisible (header);
-    content.addAndMakeVisible (trackList);
-    content.addAndMakeVisible (trackPanel);
-    content.addAndMakeVisible (grid);
-    content.addAndMakeVisible (lanes);
-    content.addAndMakeVisible (status);
+    for (auto* c : std::initializer_list<juce::Component*> { &header, &overview, &pads, &edit, &global, &status })
+        content.addAndMakeVisible (c);
 
-    trackList.onSelect = [this] (int i) { selectTrack (i); };
-    header.onThemeToggle = [this]
+    auto hint = [this] (const juce::String& h) { status.setHint (h); };
+    overview.onHint = hint;
+    edit.onHint     = hint;
+
+    header.onAddTrack = [this]
+    {
+        const int i = proc.addTrack();
+        overview.rebuildIfNeeded();
+        if (i >= 0) selectTrack (i);
+    };
+    header.onPatternChanged = [this] { patternChanged(); };
+    edit.onPatternChanged   = [this] { patternChanged(); };
+
+    overview.onSelect   = [this] (int i) { selectTrack (i); };
+    overview.onAudition = [this] (int i) { proc.audition (i); };
+
+    pads.onPadClick = [this] (int i)
+    {
+        if (! proc.isTrackEnabled (i))
+        {
+            proc.setBoolParam (i, ParamIDs::enabled, true);
+            overview.rebuildIfNeeded();
+        }
+        selectTrack (i);
+        proc.audition (i);
+    };
+    pads.onLayoutApplied = [this] { patternChanged(); };
+
+    global.onThemeToggle = [this]
     {
         proc.uiTheme = proc.uiTheme == 0 ? 1 : 0;
         applyTheme();
     };
-    header.onPatternChanged     = [this] { patternChanged(); };
-    trackPanel.onPatternChanged = [this] { patternChanged(); };
-    grid.onHint  = [this] (const juce::String& h) { status.setHint (h); };
-    lanes.onHint = [this] (const juce::String& h) { status.setHint (h); };
-    trackPanel.onHint = grid.onHint;
 
-    selectTrack (proc.uiSelectedTrack);
+    selectTrack (proc.isTrackEnabled (proc.uiSelectedTrack) ? proc.uiSelectedTrack : -1);
 
     // Read the saved scale before anything can trigger resized().
     const float scale = juce::jlimit (0.5f, 4.0f, proc.uiScale);
@@ -53,27 +71,32 @@ DYSequencerEditor::~DYSequencerEditor()
 void DYSequencerEditor::applyTheme()
 {
     lookAndFeel.setTheme (proc.uiTheme == 0 ? Theme::dark() : Theme::light());
-    header.refresh();
+    global.refresh();
     sendLookAndFeelChange();
     repaint();
 }
 
 void DYSequencerEditor::patternChanged()
 {
-    trackPanel.refresh();
     header.refresh();
-    grid.repaint();
-    lanes.repaint();
+    edit.refresh();
+    overview.refresh();
+    pads.repaint();
 }
 
 void DYSequencerEditor::selectTrack (int i)
 {
-    selectedTrack = juce::jlimit (0, kNumTracks - 1, i);
-    proc.uiSelectedTrack = selectedTrack;
-    trackList.setSelected (selectedTrack);
-    trackPanel.setTrack (selectedTrack);
-    grid.setTrack (selectedTrack);
-    lanes.setTrack (selectedTrack);
+    if (i >= 0 && ! proc.isTrackEnabled (i))
+        i = -1;
+    if (i < 0)
+        for (int k = 0; k < kNumTracks && i < 0; ++k)
+            if (proc.isTrackEnabled (k)) i = k;
+
+    selectedTrack = i;
+    proc.uiSelectedTrack = juce::jmax (0, i);
+    overview.setSelected (i);
+    pads.setSelected (i);
+    edit.setTrack (i);
 }
 
 void DYSequencerEditor::paint (juce::Graphics& g)
@@ -89,30 +112,43 @@ void DYSequencerEditor::resized()
 
     content.setTransform (juce::AffineTransform::scale (scale));
     content.setBounds (0, 0, kLogicalW, kLogicalH);
+    layoutPanels();
+}
 
+void DYSequencerEditor::layoutPanels()
+{
     auto r = content.getLocalBounds();
     header.setBounds (r.removeFromTop (kHeaderH));
     status.setBounds (r.removeFromBottom (kStatusH));
     r = r.reduced (8, 0).withTrimmedBottom (4);
 
-    trackList.setBounds (r.removeFromLeft (kTrackListW));
-    r.removeFromLeft (8);
+    lastOverviewHeight = overview.preferredHeight();
+    overview.setBounds (r.removeFromTop (lastOverviewHeight));
+    r.removeFromTop (8);
 
-    trackPanel.setBounds (r.removeFromTop (150));
-    r.removeFromTop (8);
-    grid.setBounds (r.removeFromTop (74));
-    r.removeFromTop (8);
-    lanes.setBounds (r);
+    auto left = r.removeFromLeft (250);
+    pads.setBounds (left.removeFromTop (juce::jmin (296, left.getHeight() * 55 / 100)));
+    left.removeFromTop (8);
+    global.setBounds (left);
+    r.removeFromLeft (8);
+    edit.setBounds (r);
 }
 
 void DYSequencerEditor::timerCallback()
 {
-    // Playheads and host-driven parameter changes.
-    trackList.refresh();
-    grid.repaint();
-    lanes.repaint();
+    // Tracks added / removed from the host side, and a selection that vanished.
+    if (overview.rebuildIfNeeded() || overview.preferredHeight() != lastOverviewHeight)
+    {
+        layoutPanels();
+        header.refresh();
+        if (selectedTrack < 0 || ! proc.isTrackEnabled (selectedTrack))
+            selectTrack (-1);
+    }
+
+    overview.refresh();
+    pads.refresh();
+    edit.refresh();
     status.repaint();
-    trackPanel.refresh();
 }
 
 } // namespace dy

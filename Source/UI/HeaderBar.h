@@ -34,28 +34,16 @@ public:
     void resized() override;
     void refresh();
 
-    std::function<void()> onThemeToggle;
+    std::function<void()> onAddTrack;
     std::function<void()> onPatternChanged;
 
 private:
-    struct Combo
-    {
-        juce::ComboBox box;
-        juce::Label label;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> att;
-    };
-    void setupCombo (Combo&, const juce::String& caption, const juce::StringArray& items, const juce::String& id, const juce::String& tip);
-
     DYSequencerProcessor& proc;
 
-    Combo key, scale, swingProfile;
-    juce::Slider swingAmount;
-    juce::Label  swingLabel, barsLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> swingAtt;
-
-    juce::TextButton copyAll { "Copy All" }, pasteAll { "Paste All" }, themeButton;
-    juce::ComboBox exportBars;
-    MidiDragSource dragSource;
+    juce::TextButton addTrack { "+  Add track" }, clearAll { "Clear all" }, copyAll { "Copy All" }, pasteAll { "Paste All" };
+    juce::Label     barsLabel;
+    juce::ComboBox  exportBars;
+    MidiDragSource  dragSource;
 };
 
 } // namespace dy

@@ -40,7 +40,7 @@ public:
                                                  const PatternModel& pattern,
                                                  int bars);
 
-    static constexpr double kMaxTimingMs   = 64.0;
+    static constexpr double kMaxTimingMs   = 192.0;  // step (64) + track shift (64) + master (64)
     static constexpr double kJumpTolerance = 0.02;   // ppq; ~10ms at 120bpm
     static constexpr double kBoundaryEps   = 1e-9;   // ppq; absorbs block-edge rounding
 
