@@ -1,6 +1,7 @@
 #pragma once
 #include "PluginProcessor.h"
 #include "UI/Controls.h"
+#include "UI/ModPanel.h"
 #include "UI/NodalLookAndFeel.h"
 #include "UI/PlateView.h"
 
@@ -21,7 +22,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    static constexpr int kW = 1180, kH = 740;
+    static constexpr int kW = 1180, kH = 916;
 
 private:
     void newOpenGLContextCreated() override { renderer.create (gl); }
@@ -30,6 +31,8 @@ private:
     void timerCallback() override;
     void layout();
     void setView (int v);
+    void updateModRings();
+    void stepPreset (int delta);
 
     NodalProcessor& proc;
     NodalLookAndFeel lnf;
@@ -50,8 +53,11 @@ private:
     PlateView plate;
     Spectrum spectrum;
     Meters meters;
+    ModPanel modPanel;
+    juce::ComboBox presetBox;
+    juce::TextButton prevPreset { "<" }, nextPreset { ">" };
     juce::Rectangle<int> plateRect;
-    int tick = 0, lastGlKey = -1;   // editor coordinates, for the background hole
+    int tick = 0, lastGlKey = -1, testStrikeTicks = 0;   // editor coordinates, for the background hole
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NodalEditor)
 };

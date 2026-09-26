@@ -162,6 +162,7 @@ void PlateRenderer::rebuild (int b)
                 }
             }
         V.assign (static_cast<size_t> (LW * LH), 0.0f);
+        inside.clear();
         outline.clear();
     }
     else
@@ -175,6 +176,10 @@ void PlateRenderer::rebuild (int b)
                     table[static_cast<size_t> ((i * G + gy) * G + gx)] = modeShape (bd, ms[static_cast<size_t> (i)], Vec3 (x, y, 0.0f));
                 }
         V.assign (static_cast<size_t> (G * G), 0.0f);
+        inside.assign (static_cast<size_t> (G * G), 0);
+        for (int gy = 0; gy < G; ++gy)
+            for (int gx = 0; gx < G; ++gx)
+                inside[static_cast<size_t> (gy * G + gx)] = insidePlate (bd, gx / float (G - 1) * 2.0f - 1.0f, 1.0f - gy / float (G - 1) * 2.0f) ? 1 : 0;
 
         outline.clear();
         const int N = 240;
@@ -189,10 +194,10 @@ void PlateRenderer::rebuild (int b)
     }
 
     // Before anything has been played, show a characteristic figure.
-    for (auto& w : weights) w = 0.0f;
-    weights[5] = 1.0f;
+    Vt.assign (V.size(), 0.0f);
+    comb.assign (V.size(), 0.0f);
+    showSingleMode (5);
     seed();
-    computeField();
     presettle (220);
 }
 
@@ -230,7 +235,7 @@ void PlateRenderer::seed()
 
 void PlateRenderer::presettle (int iterations)
 {
-    for (int i = 0; i < iterations; ++i) stepGrains (0.4f);
+    for (int i = 0; i < iterations; ++i) stepGrains (0.4f, false);
 }
 
 bool PlateRenderer::updateWeights()
@@ -241,8 +246,9 @@ bool PlateRenderer::updateWeights()
     bool changed = false;
     if (tot > 1e-5f)
     {
-        for (int i = 0; i < kMaxModes; ++i)
-            weights[i] = weights[i] * 0.8f + 0.2f * (i < active ? e[i] / tot : 0.0f);
+        buildTarget (e, active);
+        for (size_t k = 0; k < V.size(); ++k) V[k] += 0.2f * (Vt[k] - V[k]);      // morph towards it
+        normaliseField();
         changed = true;
     }
     const auto s = proc.telemetry.strikes.load();
@@ -250,19 +256,89 @@ bool PlateRenderer::updateWeights()
     return changed;
 }
 
-void PlateRenderer::computeField()
+// Modes that ring at (nearly) one frequency move together, so their shapes add up
+// coherently: a degenerate pair turns into one figure oriented by the strike point,
+// and modes pulled onto the same note make Chladni's hybrid figures. Groups at
+// different pitches do not interfere (their cross terms average out), but summing
+// them leaves the sand only a few points that are still for all of them, so the
+// figure follows the strongest group; close rivals (within ~25 %) blend in by energy^8.
+void PlateRenderer::buildTarget (const float* e, int active)
 {
-    std::fill (V.begin(), V.end(), 0.0f);
-    const size_t n = V.size();
-    for (int i = 0; i < kMaxModes; ++i)
+    const Body bd = static_cast<Body> (body);
+    const auto& ms = modeSet (bd).modes;
+    const float sx = clampT (proc.params.strikeX->load() + proc.telemetry.mod[ModStrikeX].load(), -1.0f, 1.0f);
+    const float sy = clampT (proc.params.strikeY->load() + proc.telemetry.mod[ModStrikeY].load(), -1.0f, 1.0f);
+    const Vec3 sp = strikePoint (bd, sx, sy);
+
+    float emax = 0.0f;
+    for (int i = 0; i < active; ++i) emax = std::max (emax, e[i]);
+    int idx[kMaxModes], n = 0;
+    float f[kMaxModes] {};
+    for (int i = 0; i < std::min (active, static_cast<int> (ms.size())); ++i)
     {
-        const float w = weights[i];
-        if (w < 0.002f) continue;
-        const float* t = table.data() + static_cast<size_t> (i) * n;
-        for (size_t k = 0; k < n; ++k) V[k] += w * t[k] * t[k];
+        f[i] = proc.telemetry.freq[static_cast<size_t> (i)].load();
+        if (e[i] > emax * 1e-4f && f[i] > 0.0f) idx[n++] = i;
     }
+    std::sort (idx, idx + n, [&] (int a, int b) { return f[a] < f[b]; });
+
+    struct Group { int first = 0, count = 0; float energy = 0.0f; int loudest = 0; };
+    Group groups[kMaxModes];
+    int ng = 0;
+    for (int k = 0; k < n; ++k)
+    {
+        const int i = idx[k];
+        if (ng == 0 || f[i] > f[idx[k - 1]] * 1.01f) groups[ng++] = { k, 0, 0.0f, i };
+        auto& g = groups[ng - 1];
+        ++g.count;
+        g.energy += e[i];
+        if (e[i] > e[g.loudest]) g.loudest = i;
+    }
+    float gmax = 1e-12f;
+    int best = 0;
+    for (int g = 0; g < ng; ++g) if (groups[g].energy > gmax) { gmax = groups[g].energy; best = g; }
+    if (ng > 0) state.shownMode = groups[best].loudest;
+
+    std::fill (Vt.begin(), Vt.end(), 0.0f);
+    const size_t cells = V.size();
+    for (int g = 0; g < ng; ++g)
+    {
+        const float w = std::pow (groups[g].energy / gmax, 8.0f);
+        if (w < 0.08f) continue;                      // only close rivals blend in
+        std::fill (comb.begin(), comb.end(), 0.0f);
+        for (int k = groups[g].first; k < groups[g].first + groups[g].count; ++k)
+        {
+            const int i = idx[k];
+            const float a = (modeShape (bd, ms[static_cast<size_t> (i)], sp) >= 0.0f ? 1.0f : -1.0f) * std::sqrt (e[i]);
+            const float* t = table.data() + static_cast<size_t> (i) * cells;
+            for (size_t c = 0; c < cells; ++c) comb[c] += a * t[c];
+        }
+        float m = 1e-20f;
+        for (size_t c = 0; c < cells; ++c) { comb[c] *= comb[c]; m = std::max (m, comb[c]); }
+        const float s = w / m;
+        for (size_t c = 0; c < cells; ++c) Vt[c] += s * comb[c];
+    }
+    float m = 1e-20f;
+    for (float v : Vt) m = std::max (m, v);
+    for (auto& v : Vt) v /= m;
+}
+
+void PlateRenderer::showSingleMode (int index)
+{
+    const size_t cells = V.size();
+    const float* t = table.data() + static_cast<size_t> (clampT (index, 0, kMaxModes - 1)) * cells;
+    for (size_t c = 0; c < cells; ++c) V[c] = t[c] * t[c];
+    normaliseField();
+    state.shownMode = index;
+}
+
+void PlateRenderer::normaliseField()
+{
+    // Off the plate counts as full vibration, so the edge is not a false nodal line.
     maxV = 1e-6f;
-    for (float v : V) maxV = std::max (maxV, v);
+    const bool masked = inside.size() == V.size();
+    for (size_t c = 0; c < V.size(); ++c) if (! masked || inside[c]) maxV = std::max (maxV, V[c]);
+    if (masked)
+        for (size_t c = 0; c < V.size(); ++c) if (! inside[c]) V[c] = maxV;
 }
 
 float PlateRenderer::sample2 (float x, float y) const
@@ -289,14 +365,33 @@ float PlateRenderer::sample3 (Vec3 d) const
     return (at (x0, iy) * (1 - fx) * (1 - fy) + at (x1, iy) * fx * (1 - fy) + at (x0, iy + 1) * (1 - fx) * fy + at (x1, iy + 1) * fx * fy) / maxV;
 }
 
-void PlateRenderer::stepGrains (float shake)
+void PlateRenderer::stepGrains (float shake, bool sprinkle)
 {
     // Sand slides down the time-averaged vibration (sum of w_i * shape_i^2) towards
     // the places that do not move, and is thrown about where the plate moves most.
     const Body bd = static_cast<Body> (body);
-    const float settle = 0.012f * shake;
+    const float settle = 0.028f * std::sqrt (shake);      // quiet plates still sort the sand, just slower
     const float jit = shake + kick * 2.5f;
     if (settle <= 1e-5f && jit <= 1e-4f) return;
+
+    // A trickle of fresh sand while the plate rings: piles left by an earlier figure
+    // dissolve into the current one instead of growing for ever.
+    const int fresh = sprinkle ? static_cast<int> (grains * 0.0015f * std::min (1.0f, shake * 2.0f) + rng.uniform()) : 0;
+    for (int s = 0; s < fresh; ++s)
+    {
+        const size_t k = static_cast<size_t> (std::min (grains - 1, static_cast<int> (rng.uniform() * grains)));
+        if (three)
+        {
+            const float y = rng.bipolar(), t = rng.uniform() * 2.0f * static_cast<float> (kPi), r = std::sqrt (std::max (0.0f, 1.0f - y * y));
+            px[k] = r * std::cos (t); py[k] = r * std::sin (t); pz[k] = y;
+        }
+        else
+            for (int tries = 0; tries < 20; ++tries)
+            {
+                const float x = rng.bipolar(), y = rng.bipolar();
+                if (insidePlate (bd, x, y)) { px[k] = x; py[k] = y; break; }
+            }
+    }
 
     for (int i = 0; i < grains; ++i)
     {
@@ -311,7 +406,7 @@ void PlateRenderer::stepGrains (float shake)
             const float g1 = sample3 (d + t1 * e) - v, g2 = sample3 (d + t2 * e) - v;
             const float gl = std::sqrt (g1 * g1 + g2 * g2) + 1e-9f;
             const float sv = std::sqrt (v);
-            const float st = settle * std::min (1.0f, sv * 2.5f), j = (0.0008f + 0.035f * sv) * jit;
+            const float st = settle * std::min (1.0f, 0.2f + sv * 2.5f), j = (0.0008f + 0.035f * sv) * jit;
             const float m1 = -g1 / gl * st + rng.bipolar() * 0.5f * j, m2 = -g2 / gl * st + rng.bipolar() * 0.5f * j;
             const Vec3 n = (d + t1 * m1 + t2 * m2).normalised();
             px[k] = n.x; py[k] = n.y; pz[k] = n.z;
@@ -322,7 +417,7 @@ void PlateRenderer::stepGrains (float shake)
             const float gx = sample2 (x + e, y) - sample2 (x - e, y), gy = sample2 (x, y + e) - sample2 (x, y - e);
             const float gl = std::sqrt (gx * gx + gy * gy) + 1e-9f;
             const float sv = std::sqrt (v);
-            const float st = settle * std::min (1.0f, sv * 2.5f), j = (0.0008f + 0.035f * sv) * jit;
+            const float st = settle * std::min (1.0f, 0.2f + sv * 2.5f), j = (0.0008f + 0.035f * sv) * jit;
             const float nx = x - gx / gl * st + rng.bipolar() * 0.5f * j;
             const float ny = y - gy / gl * st + rng.bipolar() * 0.5f * j;
             if (insidePlate (bd, nx, ny)) { px[k] = nx; py[k] = ny; }
@@ -393,9 +488,9 @@ void PlateRenderer::render (juce::OpenGLContext& ctx)
     }
     float tot = 0.0f;
     for (int i = 0; i < kMaxModes; ++i) tot += proc.telemetry.energy[static_cast<size_t> (i)].load();
-    const float shake = clampT (std::sqrt (tot) * 2.2f, 0.0f, 1.0f);
+    // loudness in dB drives the shaking, so quiet material still sorts its sand
+    const float shake = tot > 1e-9f ? clampT ((10.0f * std::log10 (tot) + 60.0f) / 45.0f, 0.0f, 1.0f) : 0.0f;
     const bool moving = shake > 0.002f || kick > 0.01f;
-    if (dirty) computeField();
     if (view == 0 && moving) stepGrains (shake);
     if (dirty || moving || state.userRotating.load()) vertexDirty = true;
     kick = kick > 0.01f ? kick * 0.85f : 0.0f;
@@ -561,16 +656,18 @@ PlateView::PlateView (NodalProcessor& p, PlateViewState& s) : proc (p), state (s
 {
     setOpaque (false);
     setMouseCursor (juce::MouseCursor::CrosshairCursor);
-    startTimerHz (15);
+    startTimerHz (30);
 }
 
 void PlateView::timerCallback()
 {
     // Repaint the overlay only when what it shows has changed.
     juce::String key;
-    key << proc.telemetry.body.load() << '|' << proc.telemetry.dominant.load() << '|' << juce::roundToInt (proc.telemetry.f0.load() * 10.0f)
+    key << proc.telemetry.body.load() << '|' << state.shownMode.load() << '|' << juce::roundToInt (proc.telemetry.f0.load() * 10.0f)
         << '|' << proc.params.material->load() << '|' << proc.params.strikeX->load() << '|' << proc.params.strikeY->load()
-        << '|' << proc.params.spread->load() << '|' << state.yaw.load() << '|' << state.pitch.load();
+        << '|' << proc.params.spread->load() << '|' << state.yaw.load() << '|' << state.pitch.load()
+        << '|' << juce::roundToInt (modulatedStrike (0) * 400.0f) << '|' << juce::roundToInt (modulatedStrike (1) * 400.0f)
+        << '|' << juce::roundToInt (proc.telemetry.mod[ModSpread].load() * 400.0f) << '|' << juce::roundToInt (proc.telemetry.note.load() * 10.0f);
     if (key != lastHud) { lastHud = key; repaint(); }
 }
 
@@ -586,10 +683,28 @@ juce::Point<float> PlateView::fromScreen (juce::Point<float> p) const
     return { (p.x - getWidth() * 0.5f) / (side * 0.5f), (getHeight() * 0.5f - p.y) / (side * 0.5f) };
 }
 
-juce::Point<float> PlateView::strikeScreen (bool& visible) const
+float PlateView::modulatedStrike (int axis) const
+{
+    const float base = (axis == 0 ? proc.params.strikeX : proc.params.strikeY)->load();
+    return clampT (base + proc.telemetry.mod[static_cast<size_t> (axis == 0 ? ModStrikeX : ModStrikeY)].load(), -1.0f, 1.0f);
+}
+
+bool PlateView::strikeModulated() const
+{
+    auto on = [&] (int t)
+    {
+        const auto& p = proc.params;
+        for (int i = 0; i < 2; ++i) if (static_cast<int> (std::lround (p.lfoTarget[i]->load())) == t) return true;
+        return static_cast<int> (std::lround (p.envTarget->load())) == t;
+    };
+    return on (ModStrikeX) || on (ModStrikeY) || on (ModSpread);
+}
+
+juce::Point<float> PlateView::strikeScreen (bool& visible, bool modulated) const
 {
     const Body bd = static_cast<Body> (clampT (proc.telemetry.body.load(), 0, kNumBodies - 1));
-    const Vec3 s = strikePoint (bd, proc.params.strikeX->load(), proc.params.strikeY->load());
+    const Vec3 s = modulated ? strikePoint (bd, modulatedStrike (0), modulatedStrike (1))
+                             : strikePoint (bd, proc.params.strikeX->load(), proc.params.strikeY->load());
     visible = true;
     if (! is3D (bd)) return toScreen (s.x, s.y);
     float depth;
@@ -614,7 +729,7 @@ void PlateView::paint (juce::Graphics& g)
     const Body bd = static_cast<Body> (clampT (proc.telemetry.body.load(), 0, kNumBodies - 1));
     const auto& mat = kMaterials[clampT (static_cast<int> (std::lround (proc.params.material->load())), 0, kNumMaterials - 1)];
     const auto& ms = modeSet (bd).modes;
-    const int dom = clampT (proc.telemetry.dominant.load(), 0, static_cast<int> (ms.size()) - 1);
+    const int dom = clampT (state.shownMode.load(), 0, static_cast<int> (ms.size()) - 1);
 
     // HUD
     auto top = getLocalBounds().reduced (14, 10).removeFromTop (18);
@@ -641,7 +756,8 @@ void PlateView::paint (juce::Graphics& g)
 
     // markers
     bool vis = false;
-    const auto sp = strikeScreen (vis);
+    const bool modded = strikeModulated();
+    const auto sp = strikeScreen (vis, modded);
     auto dot = [&] (juce::Point<float> c, juce::Colour col, float rad, const char* txt)
     {
         g.setColour (col);
@@ -657,9 +773,25 @@ void PlateView::paint (juce::Graphics& g)
     if (! is3D (bd))
     {
         Vec3 l, rr;
-        pickupPoints (bd, strikePoint (bd, proc.params.strikeX->load(), proc.params.strikeY->load()), proc.params.spread->load(), l, rr);
+        const float spr = clampT (proc.params.spread->load() + proc.telemetry.mod[ModSpread].load(), 0.0f, 1.0f);
+        if (modded)
+            pickupPoints (bd, strikePoint (bd, modulatedStrike (0), modulatedStrike (1)), spr, l, rr);
+        else
+            pickupPoints (bd, strikePoint (bd, proc.params.strikeX->load(), proc.params.strikeY->load()), spr, l, rr);
         dot (toScreen (l.x, l.y), Colours::teal, 7.0f, "L");
         dot (toScreen (rr.x, rr.y), Colours::teal, 7.0f, "R");
+    }
+    if (modded)
+    {
+        // the set position stays as a hollow handle you can drag; the filled dot is where it is now
+        bool v0 = false;
+        const auto home = strikeScreen (v0, false);
+        if (v0)
+        {
+            g.setColour (Colours::brass.withAlpha (0.8f));
+            g.drawEllipse (home.x - 8.0f, home.y - 8.0f, 16.0f, 16.0f, 1.5f);
+            if (vis) { g.setColour (Colours::brass.withAlpha (0.35f)); g.drawLine ({ home, sp }, 1.0f); }
+        }
     }
     if (vis) dot (sp, Colours::brass, 8.0f, nullptr);
 }

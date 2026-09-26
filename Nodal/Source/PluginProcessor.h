@@ -14,7 +14,16 @@ struct Telemetry
     std::atomic<int>      body { 0 }, active { 0 }, dominant { 0 };
     std::atomic<float>    note { 48.0f }, f0 { 130.8f }, peakIn { 0.0f }, peakOut { 0.0f };
     std::atomic<uint32_t> strikes { 0 };        // bumps on every tap / transient, for the sand "kick"
+    std::atomic<float>    lfo1 { 0.0f }, lfo2 { 0.0f }, env { 0.0f }, heardNote { -1.0f }, clarity { 0.0f };
+    std::array<std::atomic<float>, kNumModTargets> mod {};     // summed modulation per target
 };
+
+struct Preset
+{
+    const char* name;
+    std::vector<std::pair<const char*, double>> values;   // everything else goes to its default
+};
+const std::vector<Preset>& factoryPresets();
 
 class NodalProcessor : public juce::AudioProcessor
 {
@@ -35,10 +44,13 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 20.0; }
 
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
+    int getNumPrograms() override { return static_cast<int> (factoryPresets().size()); }
+    int getCurrentProgram() override { return currentPreset; }
+    void setCurrentProgram (int index) override { loadPreset (index); }
+    const juce::String getProgramName (int index) override
+    {
+        return juce::isPositiveAndBelow (index, getNumPrograms()) ? juce::String (factoryPresets()[static_cast<size_t> (index)].name) : juce::String();
+    }
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock& destData) override;
@@ -49,6 +61,8 @@ public:
 
     // Set a parameter from the UI as one undoable host gesture.
     void setParam (const juce::String& id, float plainValue);
+    void loadPreset (int index);
+    int  currentPreset = 0;
 
     juce::AudioProcessorValueTreeState apvts;
     ParamRefs params;

@@ -23,10 +23,15 @@ public:
     void resized() override;
     void paint (juce::Graphics&) override;
 
+    // Show where modulation has moved this parameter (plain value), or clear it.
+    void setModulation (float plainValue, juce::Colour colour);
+    void clearModulation();
+
     juce::Slider slider;
 private:
     juce::String caption;
     bool big;
+    float shownMod = -1.0f;
     std::unique_ptr<APVTS::SliderAttachment> att;
 };
 

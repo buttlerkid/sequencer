@@ -1,9 +1,10 @@
-set(DY_NODAL_VERSION 0.1.0)
+set(DY_NODAL_VERSION 0.2.0)
 
 set(NODAL_ENGINE_SOURCES
     Source/Engine/Bodies.cpp
     Source/Engine/ModalBank.cpp
-    Source/Engine/NodalEngine.cpp)
+    Source/Engine/NodalEngine.cpp
+    Source/Engine/PitchTracker.cpp)
 
 if(DY_BUILD_TESTS)
     add_executable(nodal_tests Tests/NodalTests.cpp ${NODAL_ENGINE_SOURCES})
@@ -35,6 +36,7 @@ if(DY_BUILD_PLUGIN)
         Source/PluginEditor.cpp
         Source/UI/NodalLookAndFeel.cpp
         Source/UI/Controls.cpp
+        Source/UI/ModPanel.cpp
         Source/UI/PlateView.cpp)
 
     target_include_directories(DYNodal PRIVATE Source)

@@ -13,6 +13,7 @@ struct PlateViewState
     std::atomic<int>   grains { 9000 };
     std::atomic<float> yaw { 0.6f }, pitch { 0.35f };
     std::atomic<bool>  userRotating { false };
+    std::atomic<int>   shownMode { 0 };       // the mode the sand is mostly showing (for the HUD)
     // plate area in editor pixels (logical, before the GL rendering scale)
     std::atomic<int>   x { 0 }, y { 0 }, w { 0 }, h { 0 }, editorH { 1 };
 };
@@ -36,8 +37,10 @@ private:
     void seed();
     void presettle (int iterations);
     bool updateWeights();          // true if anything changed
-    void computeField();
-    void stepGrains (float shake);
+    void buildTarget (const float* energy, int active);
+    void showSingleMode (int index);
+    void normaliseField();
+    void stepGrains (float shake, bool sprinkle = true);
     float sample2 (float x, float y) const;
     float sample3 (Vec3 d) const;
     void buildTexture();
@@ -52,9 +55,9 @@ private:
     bool three = false;
     static constexpr int G = 128;             // 2D field grid
     static constexpr int LW = 128, LH = 64;   // 3D lat-long grid
-    std::vector<float> table, V;
+    std::vector<float> table, V, Vt, comb;
+    std::vector<juce::uint8> inside;          // 2D: grid cell lies on the plate
     float maxV = 1.0f;
-    float weights[kMaxModes] {};
     int grains = 0, lastView = -1;
     std::vector<float> px, py, pz;
     std::vector<float> vertexData, lineData;
@@ -81,7 +84,9 @@ private:
     void timerCallback() override;
     juce::Point<float> toScreen (float x, float y) const;
     juce::Point<float> fromScreen (juce::Point<float>) const;
-    juce::Point<float> strikeScreen (bool& visible) const;
+    juce::Point<float> strikeScreen (bool& visible, bool modulated = false) const;
+    float modulatedStrike (int axis) const;
+    bool  strikeModulated() const;
 
     NodalProcessor& proc;
     PlateViewState& state;

@@ -18,6 +18,8 @@ namespace Colours
     inline const juce::Colour teal     { 0xff7cc3cf };
     inline const juce::Colour plate    { 0xff0e1219 };
     inline const juce::Colour ink      { 0xff1b1407 };      // text on brass
+    inline const juce::Colour lilac    { 0xffb9a0e3 };      // the input follower's accent
+    inline const juce::Colour scopeBg  { 0xff0e1218 };
 }
 
 juce::Font displayFont (float size);     // bold, wide tracking: captions and titles

@@ -4,6 +4,9 @@
 #include "Engine/ModalBank.h"
 #include "Engine/NodalEngine.h"
 #include "Engine/Tuning.h"
+#include "Engine/Modulation.h"
+#include "Engine/PitchTracker.h"
+#include <set>
 
 #include <cstdio>
 #include <cmath>
@@ -102,7 +105,16 @@ static void testBodies()
         }
     CHECK (seen == 1);
     for (const auto& m : modeSet (Body::Circle).modes)
-        if (m.a == 1 && m.b == 1) CHECK_NEAR (m.besselZero, 1.8411837813, 1e-6);    // lowest free-edge circle mode
+    {
+        CHECK (! (m.a == 1 && m.b == 1));                                            // rigid tilt is not a mode
+        if (m.a == 1 && m.b == 2) CHECK_NEAR (m.besselZero, 5.3314427735, 1e-6);    // 1 diameter + 1 ring
+    }
+    {   // the lowest circle mode is Chladni's two-diameter cross, then the single ring
+        const auto& cm = modeSet (Body::Circle).modes;
+        CHECK (cm[0].a == 2 && cm[0].b == 1 && cm[1].a == 2 && cm[1].b == 1);
+        CHECK (cm[2].a == 0 && cm[2].b == 1);
+        CHECK_NEAR (cm[0].ratio, 1.0, 1e-9);
+    }
 
     // sphere l = 1, m = 0 is the z axis dipole
     for (const auto& m : modeSet (Body::Sphere).modes)
@@ -324,6 +336,151 @@ static void testEngine()
     }
 }
 
+
+// ------------------------------------------------------------------ v0.2: modulation
+static void testModulation()
+{
+    std::puts ("Modulation sources");
+    const double sr = 48000.0;
+    {   // free sine LFO, 1 Hz
+        Lfo l; LfoSettings s; s.rateHz = 1.0; s.shape = ShapeSine; TransportInfo t;
+        float mn = 1, mx = -1; int crossings = 0; float prev = 0;
+        for (int i = 0; i < 1500; ++i)              // 1500 * 32 samples = 1 s
+        {
+            const float v = l.advance (s, t, 0.0, kSubBlock, sr);
+            mn = std::min (mn, v); mx = std::max (mx, v);
+            if (i > 0 && (prev < 0) != (v < 0)) ++crossings;
+            prev = v;
+        }
+        CHECK (mn < -0.99f && mx > 0.99f);
+        CHECK (crossings == 2);
+    }
+    {   // synced to the song position: 1/4 at any tempo is one cycle per beat, phase from ppq
+        Lfo l; LfoSettings s; s.sync = true; s.div = 5; s.shape = ShapeSine;
+        TransportInfo t; t.valid = true; t.playing = true; t.bpm = 97.0;
+        CHECK_NEAR (l.advance (s, t, 0.25, kSubBlock, sr), 1.0f, 1e-5f);
+        CHECK_NEAR (l.advance (s, t, 3.75, kSubBlock, sr), -1.0f, 1e-5f);
+        CHECK_NEAR (l.advance (s, t, 12.0, kSubBlock, sr), 0.0f, 1e-5f);
+    }
+    {   // synced S&H plays back identically, holds within a cycle, stays in range
+        LfoSettings s; s.sync = true; s.div = 7; s.shape = ShapeSampleHold;
+        TransportInfo t; t.valid = true; t.playing = true;
+        Lfo a, b;
+        for (int i = 0; i < 400; ++i)
+        {
+            const double ppq = i * 0.01;
+            const float va = a.advance (s, t, ppq, kSubBlock, sr), vb = b.advance (s, t, ppq, kSubBlock, sr);
+            CHECK (va == vb);
+            CHECK (va >= -1.0f && va <= 1.0f);
+        }
+        CHECK (a.advance (s, t, 0.10, kSubBlock, sr) == a.advance (s, t, 0.45, kSubBlock, sr));
+        CHECK (a.advance (s, t, 0.45, kSubBlock, sr) != a.advance (s, t, 0.55, kSubBlock, sr));
+    }
+    {   // envelope follower timing
+        EnvelopeFollower e; e.setTimes (10.0, 250.0, sr);
+        for (int i = 0; i < 2400; ++i) e.push (0.5f);                 // 50 ms
+        CHECK (e.level() > 0.49f);
+        for (int i = 0; i < 12000; ++i) e.push (0.0f);                // 250 ms release
+        CHECK_NEAR (e.level(), 0.5f * std::exp (-1.0f), 0.01f);
+    }
+    {   // transients: five hits, then a steady tone that must not re-trigger
+        TransientDetector td; td.prepare (sr);
+        int hits = 0;
+        for (int h = 0; h < 5; ++h)
+            for (int i = 0; i < 12000; ++i)
+                hits += td.push (i < 400 ? float (std::exp (-i / 80.0) * ((i * 7919) % 17 - 8) / 8.0) : 0.0f) ? 1 : 0;
+        CHECK (hits == 5);
+        int tone = 0;
+        for (int i = 0; i < 48000; ++i) tone += td.push (0.3f * float (std::sin (2 * kPi * 220 * i / sr))) ? 1 : 0;
+        CHECK (tone <= 1);
+    }
+}
+
+static void testPitchTracker()
+{
+    std::puts ("Pitch tracker");
+    const double sr = 48000.0;
+    auto detect = [&] (auto gen, double seconds, float& freq, float& clarity) -> bool
+    {
+        PitchTracker t; t.prepare (sr);
+        bool ok = false;
+        for (int i = 0; i < int (sr * seconds); ++i)
+        {
+            t.push (gen (i));
+            if (i % kSubBlock == 0 && t.update()) { ok = t.valid(); freq = t.frequency(); clarity = t.clarity(); }
+        }
+        return ok;
+    };
+    float f = 0, c = 0;
+    for (double hz : { 55.0, 110.0, 220.0, 440.0, 880.0 })
+    {
+        CHECK (detect ([&] (int i) { return 0.4f * float (std::sin (2 * kPi * hz * i / sr)); }, 0.5, f, c));
+        CHECK_NEAR (f, hz, hz * 0.01);
+        CHECK (c > 0.9f);
+    }
+    // a bright sawtooth (strong harmonics) still reads as its fundamental
+    CHECK (detect ([&] (int i) { const double ph = std::fmod (110.0 * i / sr, 1.0); return float (0.5 * (2 * ph - 1)); }, 0.5, f, c));
+    CHECK_NEAR (f, 110.0, 1.5);
+    // noise and silence do not produce a confident pitch
+    Rng rng (4);
+    const bool nz = detect ([&] (int) { return rng.bipolar() * 0.3f; }, 0.5, f, c);
+    CHECK (! nz || c < 0.8f);
+    CHECK (! detect ([&] (int) { return 0.0f; }, 0.3, f, c));
+}
+
+static void testEngineModulation()
+{
+    std::puts ("Engine modulation");
+    const double sr = 48000.0;
+    {   // LFO on body pitch with snap steps through the scale, only on scale notes
+        EngineParams p; p.lfo[0].target = ModPitch; p.lfo[0].amount = 0.5; p.lfo[0].rateHz = 2.0; p.lfo[0].shape = ShapeTriangle;
+        p.glideMs = 0; p.scale = 1; p.key = 0; p.pitch = 60;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        std::set<int> seen;
+        std::vector<float> buf (512, 0.0f);
+        for (int b = 0; b < 200; ++b)
+        {
+            e.process (buf.data(), buf.data(), 512);
+            const double n = e.currentNote();
+            CHECK_NEAR (n, snapToScale (n, 0, 1), 1e-9);
+            seen.insert (int (std::lround (n)));
+        }
+        CHECK (seen.size() >= 6);
+        CHECK (*seen.begin() <= 55 && *seen.rbegin() >= 65);
+    }
+    {   // follow the input pitch: a G3 sine retunes the body to G3
+        EngineParams p; p.trackPitch = true; p.glideMs = 0; p.pitch = 48; p.scale = 1;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        std::vector<float> l (512), r (512);
+        for (int b = 0; b < 60; ++b)
+        {
+            for (int i = 0; i < 512; ++i) l[size_t (i)] = r[size_t (i)] = 0.3f * float (std::sin (2 * kPi * 196.0 * (b * 512 + i) / sr));
+            e.process (l.data(), r.data(), 512);
+        }
+        CHECK_NEAR (e.currentNote(), 55.0, 1e-6);
+        CHECK_NEAR (e.heardNote(), 55.0, 0.1);
+    }
+    {   // envelope on mix: a loud input with amount -1 pulls the mix down to dry
+        EngineParams p; p.env.target = ModMix; p.env.amount = -1.0; p.mix = 1.0;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        std::vector<float> l (512, 0.9f), r (512, 0.9f), l0 = l;
+        for (int b = 0; b < 30; ++b) { l = l0; r = l0; e.process (l.data(), r.data(), 512); }
+        CHECK (e.envValue() > 0.95f);
+        CHECK_NEAR (l[511], 0.9f, 0.05f);                          // ~dry
+    }
+    {   // block-size independence holds with LFOs, envelope and tracking running
+        EngineParams p; p.lfo[0].target = ModStrikeX; p.lfo[0].amount = 0.7; p.lfo[0].rateHz = 3.1; p.lfo[0].shape = ShapeDrift;
+        p.lfo[1].target = ModDecay; p.lfo[1].amount = -0.4; p.lfo[1].rateHz = 0.7;
+        p.env.target = ModBrightness; p.env.amount = 0.8; p.trackPitch = true;
+        Rng rng (8); std::vector<float> in (48000); for (auto& x : in) x = rng.bipolar() * 0.3f;
+        NodalEngine a, b; a.prepare (sr); b.prepare (sr); a.setParams (p); b.setParams (p);
+        std::vector<float> ra, rb;
+        auto la = runEngine (a, in, 64, &ra), lb = runEngine (b, in, 700, &rb);
+        double diff = 0; for (size_t i = 0; i < la.size(); ++i) diff = std::max (diff, double (std::abs (la[i] - lb[i])));
+        CHECK (diff < 1e-6);
+    }
+}
+
 int main()
 {
     testBessel();
@@ -331,6 +488,9 @@ int main()
     testTuning();
     testModalBank();
     testEngine();
+    testModulation();
+    testPitchTracker();
+    testEngineModulation();
     std::printf ("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

@@ -68,7 +68,7 @@ NodalEditor::NodalEditor (NodalProcessor& p)
       tuneMode (p.apvts, PID::tuneMode),
       bodies (p.apvts, PID::body, { 0, 1, 2, 3 }, drawBodyIcon),
       materials (p.apvts, PID::material),
-      plate (p, viewState), spectrum (p), meters (p)
+      plate (p, viewState), spectrum (p), meters (p), modPanel (p)
 {
     setLookAndFeel (&lnf);
     addAndMakeVisible (content);
@@ -76,7 +76,8 @@ NodalEditor::NodalEditor (NodalProcessor& p)
     for (auto* c : std::initializer_list<juce::Component*> { &tuningPanel, &resonancePanel, &ioPanel, &plate, &spectrum, &bodies, &materials,
                                                               &pitch, &glide, &lock, &density, &decay, &damping, &brightness, &spread, &drive,
                                                               &lowCut, &highCut, &mix, &output, &key, &scale, &snap, &tuneMode,
-                                                              &viewSand, &viewLines, &viewField, &bodyInfo, &snapLabel, &tuneCaption, &tuneHelp, &meters })
+                                                              &viewSand, &viewLines, &viewField, &bodyInfo, &snapLabel, &tuneCaption, &tuneHelp, &meters,
+                                                              &modPanel, &presetBox, &prevPreset, &nextPreset })
         content.addAndMakeVisible (c);
 
     bodyInfo.setJustificationType (juce::Justification::centred);
@@ -93,6 +94,20 @@ NodalEditor::NodalEditor (NodalProcessor& p)
     tuneMode.onChange = [this] (int m) { tuneHelp.setText (tuneHelpText (m), juce::dontSendNotification); lock.setEnabled (m != TuneFree); };
     tuneHelp.setText (tuneHelpText (static_cast<int> (std::lround (p.params.tuneMode->load()))), juce::dontSendNotification);
 
+    {
+        int id = 1;
+        for (const auto& pr : factoryPresets()) presetBox.addItem (pr.name, id++);
+        presetBox.setSelectedId (p.currentPreset + 1, juce::dontSendNotification);
+        presetBox.setTooltip ("Factory presets");
+        presetBox.onChange = [this]
+        {
+            const int idx = presetBox.getSelectedId() - 1;
+            if (idx >= 0 && idx != proc.currentPreset) proc.loadPreset (idx);
+        };
+        prevPreset.onClick = [this] { stepPreset (-1); };
+        nextPreset.onClick = [this] { stepPreset (1); };
+    }
+
     int i = 0;
     for (auto* b : { &viewSand, &viewLines, &viewField })
     {
@@ -106,6 +121,17 @@ NodalEditor::NodalEditor (NodalProcessor& p)
     setView (p.uiView);
 
     viewState.grains = p.uiGrains;
+
+    // UI test hook (standalone only): DY_NODAL_TEST_PRESET=<index> loads a factory preset when the window opens.
+    if (p.wrapperType == juce::AudioProcessor::wrapperType_Standalone)
+        if (const auto t = juce::SystemStats::getEnvironmentVariable ("DY_NODAL_TEST_PRESET", {}); t.isNotEmpty())
+        {
+            p.loadPreset (t.getIntValue());
+            presetBox.setSelectedId (p.currentPreset + 1, juce::dontSendNotification);
+        }
+    // DY_NODAL_TEST_STRIKE=<seconds> taps the plate at that interval.
+    if (p.wrapperType == juce::AudioProcessor::wrapperType_Standalone)
+        testStrikeTicks = juce::roundToInt (60.0 * juce::SystemStats::getEnvironmentVariable ("DY_NODAL_TEST_STRIKE", "0").getDoubleValue());
 
     gl.setPreferredVersion (juce::OpenGLVersion { 3, 2 });
     gl.setRenderer (this);
@@ -136,6 +162,13 @@ void NodalEditor::setView (int v)
     for (auto* b : { &viewSand, &viewLines, &viewField }) b->setToggleState (i++ == v, juce::dontSendNotification);
 }
 
+void NodalEditor::stepPreset (int delta)
+{
+    const int n = static_cast<int> (factoryPresets().size());
+    proc.loadPreset (((proc.currentPreset + delta) % n + n) % n);
+    presetBox.setSelectedId (proc.currentPreset + 1, juce::dontSendNotification);
+}
+
 void NodalEditor::paint (juce::Graphics& g)
 {
     // Leave the plate area empty: the GL renderer draws there.
@@ -156,6 +189,8 @@ void NodalEditor::paint (juce::Graphics& g)
     g.setColour (Colours::dim);
     g.setFont (monoFont (11.0f));
     g.drawText ("v" DY_VERSION_STRING "  chladni resonator", 130, 0, 260, 46, juce::Justification::centredLeft);
+    g.setFont (displayFont (10.0f));
+    g.drawText ("PRESET", prevPreset.getX() - 70, 0, 62, 46, juce::Justification::centredRight);
 }
 
 void NodalEditor::resized()
@@ -177,7 +212,19 @@ void NodalEditor::resized()
 
 void NodalEditor::layout()
 {
-    const int top = 58, pad = 12, bottom = kH - 12;
+    const int top = 58, pad = 12, bottom = 728;
+
+    // ---- header: presets
+    {
+        auto h = juce::Rectangle<int> (kW - pad - 330, 9, 330, 28);
+        nextPreset.setBounds (h.removeFromRight (28));
+        h.removeFromRight (4);
+        auto pb = h.removeFromRight (240);
+        presetBox.setBounds (pb);
+        h.removeFromRight (4);
+        prevPreset.setBounds (h.removeFromRight (28));
+    }
+    modPanel.setBounds (pad, bottom + 12, kW - 2 * pad, kH - 12 - (bottom + 12));
 
     // ---- left: tuning
     auto left = juce::Rectangle<int> (pad, top, 240, bottom - top);
@@ -263,13 +310,70 @@ void NodalEditor::timerCallback()
     const int glKey = proc.telemetry.body.load() * 10 + viewState.view.load();
     if (viewState.busy.load() || glKey != lastGlKey || tick % 15 == 0) gl.triggerRepaint();
     lastGlKey = glKey;
+    if (testStrikeTicks > 0 && tick % testStrikeTicks == 0) proc.requestStrike (0.9f);
     if (++tick % 2 != 0) return;              // UI widgets at 30 Hz
     meters.tick();
     (void) spectrum.tick();
+    modPanel.tick();
+    updateModRings();
+    if (presetBox.getSelectedId() != proc.currentPreset + 1)
+        presetBox.setSelectedId (proc.currentPreset + 1, juce::dontSendNotification);
     const float f0 = proc.telemetry.f0.load();
     const float cm = 30.0f * std::sqrt (261.63f / std::max (1.0f, f0));
     bodyInfo.setText (juce::String (f0, 1) + " Hz  " + juce::String::fromUTF8 ("\xE2\x89\x88 ") + juce::String (juce::roundToInt (cm)) + " cm plate",
                       juce::dontSendNotification);
+}
+
+} // namespace dy::nodal
+
+namespace dy::nodal {
+
+// Rings on the knobs that a modulation source is moving, in the source's colour.
+void NodalEditor::updateModRings()
+{
+    const auto& pr = proc.params;
+    const juce::Colour srcCol[3] = { modPanel.lfo1.accent, modPanel.lfo2.accent, modPanel.input.accent };
+    const int srcTarget[3] = { static_cast<int> (std::lround (pr.lfoTarget[0]->load())), static_cast<int> (std::lround (pr.lfoTarget[1]->load())),
+                               static_cast<int> (std::lround (pr.envTarget->load())) };
+    auto colourFor = [&] (int t, bool extra, juce::Colour extraCol, bool& any)
+    {
+        int count = extra ? 1 : 0;
+        juce::Colour c = extraCol;
+        for (int s = 0; s < 3; ++s) if (srcTarget[s] == t) { ++count; c = srcCol[s]; }
+        any = count > 0;
+        return count > 1 ? Colours::text : c;
+    };
+    auto modOf = [&] (int t) { return proc.telemetry.mod[static_cast<size_t> (t)].load(); };
+    auto plain = [] (std::atomic<float>* a) { return a->load(); };
+
+    struct Row { int target; Knob* knob; };
+    const Row rows[] = { { ModDecay, &decay }, { ModDamping, &damping }, { ModBrightness, &brightness }, { ModSpread, &spread },
+                         { ModLock, &lock }, { ModMix, &mix }, { ModDrive, &drive } };
+    for (const auto& row : rows)
+    {
+        bool any = false;
+        const auto col = colourFor (row.target, false, {}, any);
+        if (! any) { row.knob->clearModulation(); continue; }
+        const float m = modOf (row.target);
+        float v = 0.0f;
+        switch (row.target)
+        {
+            case ModDecay:      v = plain (pr.decay) * std::pow (2.0f, m * 3.0f); break;
+            case ModDamping:    v = plain (pr.damping) + m; break;
+            case ModBrightness: v = plain (pr.brightness) + m; break;
+            case ModSpread:     v = plain (pr.spread) + m; break;
+            case ModLock:       v = plain (pr.lock) + m; break;
+            case ModMix:        v = plain (pr.mix) + m; break;
+            case ModDrive:      v = plain (pr.drive) + m * 24.0f; break;
+            default: break;
+        }
+        row.knob->setModulation (v, col);
+    }
+    // body pitch: show where the body actually is (modulation, input pitch, scale snap)
+    bool any = false;
+    const auto col = colourFor (ModPitch, pr.trackPitch->load() > 0.5f, Colours::lilac, any);
+    if (any) pitch.setModulation (proc.telemetry.note.load(), col);
+    else     pitch.clearModulation();
 }
 
 } // namespace dy::nodal

@@ -43,6 +43,26 @@ void Knob::resized()
     slider.setBounds (r);
 }
 
+void Knob::setModulation (float plainValue, juce::Colour colour)
+{
+    const float pos = juce::jlimit (0.0f, 1.0f, static_cast<float> (slider.valueToProportionOfLength (plainValue)));
+    auto& props = slider.getProperties();
+    const auto argb = static_cast<juce::int64> (colour.getARGB());
+    if (std::abs (pos - shownMod) < 0.002f && props["modColour"] == juce::var (argb)) return;
+    shownMod = pos;
+    props.set ("modPos", pos);
+    props.set ("modColour", argb);
+    slider.repaint();
+}
+
+void Knob::clearModulation()
+{
+    if (shownMod < 0.0f) return;
+    shownMod = -1.0f;
+    slider.getProperties().remove ("modPos");
+    slider.repaint();
+}
+
 void Knob::paint (juce::Graphics& g)
 {
     if (big) return;

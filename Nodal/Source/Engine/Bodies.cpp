@@ -330,6 +330,7 @@ static std::vector<Mode> enumerate (Body b)
             for (int n = 0; n <= 10; ++n)
                 for (int m = 1; m <= 5; ++m)
                 {
+                    if (n == 1 && m == 1) continue;        // J1 (1.84 r): on a free plate that is rigid tilting, not a mode
                     const double j = besselPrimeZero (n, m);
                     add (n, m, 0, 0, j * j);
                     if (n > 0) add (n, m, 0, 1, j * j * 1.004);

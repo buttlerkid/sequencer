@@ -75,6 +75,27 @@ void NodalLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w,
         g.strokePath (v, juce::PathStrokeType (lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
+    // Modulation: a thin outer ring from the set value to where the modulation has
+    // taken it right now (set by Knob::setModulation).
+    const auto& props = s.getProperties();
+    if (props.contains ("modPos"))
+    {
+        const float mp = juce::jlimit (0.0f, 1.0f, static_cast<float> (static_cast<double> (props["modPos"])));
+        const float ma = a0 + mp * (a1 - a0);
+        const juce::Colour mc (static_cast<juce::uint32> (static_cast<juce::int64> (props["modColour"])));
+        const float ringR = arcR + lineW * 0.95f;
+        if (std::abs (ma - ang) > 0.005f)
+        {
+            juce::Path m;
+            m.addCentredArc (c.x, c.y, ringR, ringR, 0.0f, juce::jmin (ma, ang), juce::jmax (ma, ang), true);
+            g.setColour (mc.withAlpha (0.9f));
+            g.strokePath (m, juce::PathStrokeType (juce::jmax (1.6f, lineW * 0.45f), juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+        const float dr = juce::jmax (2.2f, lineW * 0.5f);
+        g.setColour (mc);
+        g.fillEllipse (c.x + std::sin (ma) * ringR - dr, c.y - std::cos (ma) * ringR - dr, dr * 2, dr * 2);
+    }
+
     const float bodyR = arcR - lineW * 1.6f;
     g.setColour (Colours::panel2);
     g.fillEllipse (c.x - bodyR, c.y - bodyR, bodyR * 2, bodyR * 2);
