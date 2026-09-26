@@ -66,7 +66,7 @@ NodalEditor::NodalEditor (NodalProcessor& p)
       output (p.apvts, PID::output, "Output"),
       key (p.apvts, PID::key, "Key"), scale (p.apvts, PID::scale, "Scale"), snap (p.apvts, PID::snap),
       tuneMode (p.apvts, PID::tuneMode),
-      bodies (p.apvts, PID::body, { 0, 1, 2, 3 }, drawBodyIcon),
+      bodies (p.apvts, PID::body, { 0, 1, 2, 3, 4, 5, 6 }, drawBodyIcon),
       materials (p.apvts, PID::material),
       plate (p, viewState), spectrum (p), meters (p), modPanel (p)
 {

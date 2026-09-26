@@ -14,6 +14,8 @@ struct PlateViewState
     std::atomic<float> yaw { 0.6f }, pitch { 0.35f };
     std::atomic<bool>  userRotating { false };
     std::atomic<int>   shownMode { 0 };       // the mode the sand is mostly showing (for the HUD)
+    std::atomic<int>   shownExtra { 0 };      // other distinct modes ringing at the same pitch
+    std::atomic<bool>  shownZonal { false };  // a whole shell multiplet: rings around the strike point
     // plate area in editor pixels (logical, before the GL rendering scale)
     std::atomic<int>   x { 0 }, y { 0 }, w { 0 }, h { 0 }, editorH { 1 };
 };
@@ -87,6 +89,7 @@ private:
     juce::Point<float> strikeScreen (bool& visible, bool modulated = false) const;
     float modulatedStrike (int axis) const;
     bool  strikeModulated() const;
+    bool  pickSurface (juce::Point<float> screen, Vec3& direction) const;
 
     NodalProcessor& proc;
     PlateViewState& state;

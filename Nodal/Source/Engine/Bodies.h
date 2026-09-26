@@ -51,6 +51,13 @@ Vec3  strikePoint (Body b, float sx, float sy);
 // Stereo pickups placed opposite the strike, spread apart by `spread` (0..1).
 void  pickupPoints (Body b, Vec3 strike, float spread, Vec3& left, Vec3& right);
 
+// The view of a turned 3D body: returns (x, y) in plate units and z = depth 0..1 (1 = nearest).
+Vec3  projectBody (Vec3 p, float yaw, float pitch);
+// The front-most direction whose surface point projects to (x, y); false if (x, y) is off the body.
+bool  pickSurface (Body b, float x, float y, float yaw, float pitch, Vec3& direction);
+// Inverse of strikePoint for 3D bodies (elevation beyond the knob range is clamped).
+void  strikeFromDirection (Vec3 d, float& sx, float& sy);
+
 // "N 2 · M 3" style label for a mode.
 std::string modeLabel (Body b, const Mode& m);
 

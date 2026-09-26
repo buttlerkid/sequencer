@@ -62,6 +62,15 @@ const std::vector<Preset>& factoryPresets()
                                { "envTarget", 4 }, { "envAmount", 0.6f }, { "lowCut", 60 } } },
         { "Follow the Singer", { { "body", 1 }, { "material", 2 }, { "trackPitch", 1 }, { "tuneMode", 2 }, { "decay", 2.5f },
                                  { "mix", 0.45f }, { "glide", 60 } } },
+        { "Singing Sphere", { { "body", 4 }, { "material", 2 }, { "tuneMode", 2 }, { "pitch", 57 }, { "decay", 6 }, { "damping", 0.1f },
+                              { "brightness", 0.2f }, { "density", 24 }, { "mix", 0.6f }, { "strikeX", 0.2f }, { "strikeY", 0.3f } } },
+        { "Icosa Gamelan", { { "body", 6 }, { "material", 1 }, { "scale", 14 }, { "tuneMode", 1 }, { "pitch", 52 }, { "decay", 4 },
+                             { "damping", 0.25f }, { "density", 28 }, { "strikeX", -0.3f }, { "strikeY", 0.4f } } },
+        { "Crystal Cube", { { "body", 5 }, { "material", 3 }, { "scale", 8 }, { "pitch", 60 }, { "decay", 7 }, { "density", 28 },
+                            { "brightness", 0.3f }, { "lfo1Target", 5 }, { "lfo1Amount", 0.5f }, { "lfo1Rate", 0.05f }, { "lfo1Shape", 5 } } },
+        { "Orbiting Strike", { { "body", 4 }, { "material", 0 }, { "tuneMode", 0 }, { "pitch", 50 }, { "decay", 5 }, { "damping", 0.15f },
+                               { "density", 24 }, { "strikeX", 0.0f }, { "strikeY", 0.25f }, { "lfo1Target", 5 }, { "lfo1Amount", 1.0f },
+                               { "lfo1Shape", 2 }, { "lfo1Rate", 0.1f } } },
     };
     return p;
 }

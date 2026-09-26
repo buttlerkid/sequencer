@@ -9,12 +9,9 @@ using namespace juce::gl;
 // ------------------------------------------------------------------ projection
 juce::Point<float> projectBody (Vec3 p, float yaw, float pitch, float& depth)
 {
-    const float cy = std::cos (yaw), sy = std::sin (yaw), cp = std::cos (pitch), sp = std::sin (pitch);
-    const float x = p.x * cy + p.z * sy, z0 = -p.x * sy + p.z * cy;
-    const float y = p.y * cp - z0 * sp, z = p.y * sp + z0 * cp;
-    const float f = 3.2f / (3.2f - z * 0.9f), k = 0.7f;
-    depth = clampT ((z + 1.0f) * 0.5f, 0.0f, 1.0f);
-    return { x * f * k, y * f * k };
+    const Vec3 v = dy::nodal::projectBody (p, yaw, pitch);
+    depth = v.z;
+    return { v.x, v.y };
 }
 
 // ------------------------------------------------------------------ shaders
@@ -197,6 +194,8 @@ void PlateRenderer::rebuild (int b)
     Vt.assign (V.size(), 0.0f);
     comb.assign (V.size(), 0.0f);
     showSingleMode (5);
+    state.shownExtra = 0;
+    state.shownZonal = false;
     seed();
     presettle (220);
 }
@@ -296,7 +295,29 @@ void PlateRenderer::buildTarget (const float* e, int active)
     float gmax = 1e-12f;
     int best = 0;
     for (int g = 0; g < ng; ++g) if (groups[g].energy > gmax) { gmax = groups[g].energy; best = g; }
-    if (ng > 0) state.shownMode = groups[best].loudest;
+    if (ng > 0)
+    {
+        const auto& g = groups[best];
+        state.shownMode = g.loudest;
+        // distinct shapes in the group (a degenerate +/- or cos/sin pair counts once)
+        int distinct = 0;
+        bool sameDegree = true;
+        for (int k = g.first; k < g.first + g.count; ++k)
+        {
+            const Mode& m = ms[static_cast<size_t> (idx[k])];
+            bool seen = false;
+            for (int j = g.first; j < k; ++j)
+            {
+                const Mode& o = ms[static_cast<size_t> (idx[j])];
+                if (o.a == m.a && o.b == m.b && o.c == m.c) seen = true;
+            }
+            if (! seen) ++distinct;
+            if (m.a != ms[static_cast<size_t> (g.loudest)].a) sameDegree = false;
+        }
+        const bool shell = bd == Body::Sphere || bd == Body::Icosahedron;
+        state.shownZonal = shell && sameDegree && distinct > 2;
+        state.shownExtra = std::max (0, distinct - 1);
+    }
 
     std::fill (Vt.begin(), Vt.end(), 0.0f);
     const size_t cells = V.size();
@@ -663,7 +684,7 @@ void PlateView::timerCallback()
 {
     // Repaint the overlay only when what it shows has changed.
     juce::String key;
-    key << proc.telemetry.body.load() << '|' << state.shownMode.load() << '|' << juce::roundToInt (proc.telemetry.f0.load() * 10.0f)
+    key << proc.telemetry.body.load() << '|' << state.shownMode.load() << '|' << state.shownExtra.load() << '|' << (int) state.shownZonal.load() << '|' << juce::roundToInt (proc.telemetry.f0.load() * 10.0f)
         << '|' << proc.params.material->load() << '|' << proc.params.strikeX->load() << '|' << proc.params.strikeY->load()
         << '|' << proc.params.spread->load() << '|' << state.yaw.load() << '|' << state.pitch.load()
         << '|' << juce::roundToInt (modulatedStrike (0) * 400.0f) << '|' << juce::roundToInt (modulatedStrike (1) * 400.0f)
@@ -742,7 +763,12 @@ void PlateView::paint (juce::Graphics& g)
                 juce::Justification::centredLeft);
     g.setColour (Colours::brass);
     g.setFont (monoFont (12.0f));
-    g.drawText (juce::String::fromUTF8 (modeLabel (bd, ms[static_cast<size_t> (dom)]).c_str()), top, juce::Justification::centredRight);
+    juce::String label = juce::String::fromUTF8 (modeLabel (bd, ms[static_cast<size_t> (dom)]).c_str());
+    if (state.shownZonal.load())
+        label = juce::String::fromUTF8 ("\xE2\x84\x93 ") + juce::String (ms[static_cast<size_t> (dom)].a) + juce::String::fromUTF8 (" \xC2\xB7 rings round the strike");
+    else if (const int extra = state.shownExtra.load(); extra > 0)
+        label << "  + " << extra;
+    g.drawText (label, top, juce::Justification::centredRight);
 
     auto bottom = getLocalBounds().reduced (14, 10).removeFromBottom (16);
     const float note = proc.telemetry.note.load(), f0 = proc.telemetry.f0.load();
@@ -752,7 +778,7 @@ void PlateView::paint (juce::Graphics& g)
     g.drawText (juce::MidiMessage::getMidiNoteName (juce::roundToInt (note), true, true, 3) + "  " + juce::String (f0, 1) + " Hz  "
                     + juce::String::fromUTF8 ("\xE2\x89\x88 ") + juce::String (juce::roundToInt (cm)) + " cm",
                 bottom, juce::Justification::centredLeft);
-    g.drawText (is3D (bd) ? "drag to turn  click to strike" : "click to strike  drag the dot to move it", bottom, juce::Justification::centredRight);
+    g.drawText (is3D (bd) ? "drag to turn  click to strike there" : "click to strike  drag the dot to move it", bottom, juce::Justification::centredRight);
 
     // markers
     bool vis = false;
@@ -837,9 +863,34 @@ void PlateView::mouseDrag (const juce::MouseEvent& e)
     repaint();
 }
 
-void PlateView::mouseUp (const juce::MouseEvent&)
+// The front-most surface direction under a point of the view, if the body is there.
+bool PlateView::pickSurface (juce::Point<float> screen, Vec3& direction) const
 {
     const Body bd = static_cast<Body> (clampT (proc.telemetry.body.load(), 0, kNumBodies - 1));
+    const auto t = fromScreen (screen);
+    return dy::nodal::pickSurface (bd, t.x, t.y, state.yaw.load(), state.pitch.load(), direction);
+}
+
+void PlateView::mouseUp (const juce::MouseEvent& e)
+{
+    const Body bd = static_cast<Body> (clampT (proc.telemetry.body.load(), 0, kNumBodies - 1));
+    if (is3D (bd) && ! dragged)
+    {
+        // a click (not a turn) on the shell moves the strike point there (inverse of strikePoint)
+        Vec3 d;
+        if (pickSurface (e.position, d))
+        {
+            float sx = 0.0f, sy = 0.0f;
+            strikeFromDirection (d, sx, sy);
+            for (auto* id : { &PID::strikeX, &PID::strikeY })
+                if (auto* prm = proc.apvts.getParameter (*id))
+                {
+                    prm->beginChangeGesture();
+                    prm->setValueNotifyingHost (prm->convertTo0to1 (clampT (id == &PID::strikeX ? sx : sy, -1.0f, 1.0f)));
+                    prm->endChangeGesture();
+                }
+        }
+    }
     if (! is3D (bd))
         for (auto* id : { &PID::strikeX, &PID::strikeY })
             if (auto* p = proc.apvts.getParameter (*id)) p->endChangeGesture();

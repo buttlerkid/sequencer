@@ -5,7 +5,7 @@ sets a virtual plate ringing: the plate's own vibration modes resonate with the
 input, tuned to your key if you want, and the sand on the plate shows which modes
 are sounding.
 
-![DY Nodal](../docs/nodal-v0.2.png)
+![DY Nodal](../docs/nodal-v0.3.png)
 
 ## What it does
 
@@ -20,6 +20,13 @@ use Chladni's free-plate approximation; the circle uses the free-edge Bessel mod
 (zeros of J′ₙ), so its nodal circles sit inside the plate. Its lowest figure is
 Chladni's two-diameter cross: the one-diameter "mode" of a free disc is the plate
 tilting, not vibrating, so it is left out.
+
+**Shells.** A sphere, a cube and an icosahedron, drawn in 3D and slowly turning.
+The sphere and icosahedron ring in spherical harmonics (degree ℓ from 2: ℓ = 1
+would be the whole shell moving); a perfect sphere's 2ℓ + 1 orders nearly share a
+pitch, the icosahedron's facets split them much further apart. The cube uses
+standing waves across its faces. Drag to turn the shell; click it to strike at
+that point.
 
 **Tuning.**
 - **Body size** is the plate's pitch. With **Snap** on it steps through the
@@ -49,6 +56,10 @@ and modes that Scale tuning puts on one note make Chladni's hybrid figures. The
 sand follows the strongest such group (close rivals blend in), with a trickle of
 fresh sand while the plate rings so old figures dissolve into new ones. Quiet
 plates sort their sand more slowly, and it stops when the plate falls silent.
+On a sphere a whole ℓ family rings together, and the sand draws rings round the
+strike point, as the addition theorem says it must; the corner label then reads
+"rings round the strike". When modes of different shapes share a pitch the label
+adds "+ n".
 *Lines* shows only the nodal lines; *Field* shows vibration strength. The strip
 below the plate shows every mode's frequency against the keyboard of your key and
 scale, with its current level.
@@ -67,10 +78,11 @@ scale, with its current level.
   being moved shows a ring in the source's colour (white when several sources
   share it), and a modulated strike point leaves a hollow handle where it is set.
 
-**Presets.** Eleven factory starting points in the header (also listed as the
-plugin's programs in the host): steel plate, brass bowl, glass harmonica, gamelan slendro,
-violin top, crystal shimmer, stepping bell, ducked plate, dark gong, tuned drum
-room, follow the singer.
+**Presets.** Fifteen factory starting points in the header (also listed as the
+plugin's programs in the host): steel plate, brass bowl, glass harmonica, gamelan
+slendro, violin top, crystal shimmer, stepping bell, ducked plate, dark gong, tuned
+drum room, follow the singer, singing sphere, icosa gamelan, crystal cube and
+orbiting strike (an LFO walks the strike point round a steel sphere).
 
 ## Using it in Live
 
@@ -98,8 +110,9 @@ colour it continuously. Everything except the display style is automatable.
   decay, noise gain, runaway protection, 20 s stress test, block-size
   independence, bypass, levels, LFO shapes and song-position sync, envelope
   timing, transient detection, pitch detection (sines, a sawtooth, noise,
-  silence), and modulation end to end (scale-stepped pitch, pitch follow,
-  envelope ducking).
+  silence), modulation end to end (scale-stepped pitch, pitch follow,
+  envelope ducking), and 3D picking (a point on a turned shell back to the
+  strike knobs, for all three shells from random views).
 
 ## Building
 

@@ -116,9 +116,53 @@ static void testBodies()
         CHECK_NEAR (cm[0].ratio, 1.0, 1e-9);
     }
 
-    // sphere l = 1, m = 0 is the z axis dipole
+    // picking a point on a turned 3D body finds the front surface there, and a strike
+    // knob position survives the round trip direction -> knobs -> direction
+    {
+        Rng pr (77);
+        int picked = 0, frontOk = 0, trials = 0;
+        for (auto body : { Body::Sphere, Body::Cube, Body::Icosahedron })
+            for (int k = 0; k < 12; ++k)
+            {
+                const float yaw = pr.bipolar() * 3.0f, pitch = pr.bipolar() * 1.2f;
+                const float sx = pr.bipolar() * 0.95f, sy = pr.bipolar() * 0.9f;
+                const Vec3 d = strikePoint (body, sx, sy);
+                const Vec3 p = projectBody (surfacePoint (body, d), yaw, pitch);
+                if (p.z < 0.62f) continue;                              // only points clearly on the front
+                ++trials;
+                Vec3 got;
+                if (pickSurface (body, p.x, p.y, yaw, pitch, got))
+                {
+                    ++picked;
+                    if (got.dot (d) > 0.995f) ++frontOk;
+                    float bx = 0, by = 0;
+                    strikeFromDirection (got, bx, by);
+                    CHECK_NEAR (bx, sx, 0.03f);
+                    CHECK_NEAR (by, sy, 0.03f);
+                }
+            }
+        CHECK (trials > 10);
+        CHECK (picked == trials);
+        CHECK (frontOk == trials);
+        Vec3 none;
+        CHECK (! pickSurface (Body::Sphere, 0.98f, 0.98f, 0.3f, 0.2f, none));   // off the body
+    }
+
+    // shells start at l = 2 (l = 1 is rigid motion); l = 2, m = 0 is 3z^2 - 1: peaks at the poles,
+    // -1/2 on the equator, nodal cones at z^2 = 1/3
+    for (auto body : { Body::Sphere, Body::Icosahedron })
+    {
+        const auto& sm = modeSet (body).modes;
+        CHECK (sm[0].a == 2);
+        for (const auto& m : sm) CHECK (m.a >= 2);
+    }
     for (const auto& m : modeSet (Body::Sphere).modes)
-        if (m.a == 1 && m.b == 0) { CHECK_NEAR (std::abs (modeShape (Body::Sphere, m, Vec3 (0, 0, 1))), 1.0f, 1e-3f); CHECK_NEAR (modeShape (Body::Sphere, m, Vec3 (1, 0, 0)), 0.0f, 1e-5f); }
+        if (m.a == 2 && m.b == 0)
+        {
+            CHECK_NEAR (std::abs (modeShape (Body::Sphere, m, Vec3 (0, 0, 1))), 1.0f, 1e-3f);
+            CHECK_NEAR (modeShape (Body::Sphere, m, Vec3 (1, 0, 0)) / modeShape (Body::Sphere, m, Vec3 (0, 0, 1)), -0.5f, 1e-3f);
+            CHECK_NEAR (modeShape (Body::Sphere, m, Vec3 (std::sqrt (2.0f / 3.0f), 0, std::sqrt (1.0f / 3.0f))), 0.0f, 1e-4f);
+        }
 
     // shells
     const Vec3 c = surfacePoint (Body::Cube, Vec3 (0.3f, -0.8f, 0.2f));

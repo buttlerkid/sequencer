@@ -209,6 +209,66 @@ Vec3 strikePoint (Body b, float sx, float sy)
     return p;
 }
 
+void strikeFromDirection (Vec3 d, float& sx, float& sy)
+{
+    d = d.normalised();
+    sx = clampT (std::atan2 (d.x, d.z) / static_cast<float> (kPi), -1.0f, 1.0f);
+    sy = clampT (std::asin (clampT (d.y, -1.0f, 1.0f)) / (static_cast<float> (kPi) * 0.47f), -1.0f, 1.0f);
+}
+
+Vec3 projectBody (Vec3 p, float yaw, float pitch)
+{
+    const float cy = std::cos (yaw), sy = std::sin (yaw), cp = std::cos (pitch), sp = std::sin (pitch);
+    const float x = p.x * cy + p.z * sy, z0 = -p.x * sy + p.z * cy;
+    const float y = p.y * cp - z0 * sp, z = p.y * sp + z0 * cp;
+    const float f = 3.2f / (3.2f - z * 0.9f), k = 0.7f;
+    return { x * f * k, y * f * k, clampT ((z + 1.0f) * 0.5f, 0.0f, 1.0f) };
+}
+
+bool pickSurface (Body b, float tx, float ty, float yaw, float pitch, Vec3& direction)
+{
+    auto miss = [&] (Vec3 d, float& depth)
+    {
+        const Vec3 p = projectBody (surfacePoint (b, d), yaw, pitch);
+        depth = p.z;
+        return std::hypot (p.x - tx, p.y - ty);
+    };
+    // Coarse scan of directions: among those landing near the target, the nearest to the viewer.
+    float best = 1e9f, bestDepth = -1.0f;
+    Vec3 bestDir;
+    const int NT = 48, NP = 96;
+    for (int it = 0; it < NT; ++it)
+        for (int ip = 0; ip < NP; ++ip)
+        {
+            const float th = (it + 0.5f) / NT * static_cast<float> (kPi), ph = ip / static_cast<float> (NP) * 2.0f * static_cast<float> (kPi);
+            const Vec3 d (std::sin (th) * std::cos (ph), std::cos (th), std::sin (th) * std::sin (ph));
+            float depth;
+            const float dist = miss (d, depth);
+            if (dist < 0.08f && (depth > bestDepth + 0.05f || (depth > bestDepth - 0.05f && dist < best)))
+            {
+                best = dist; bestDepth = std::max (bestDepth, depth); bestDir = d;
+            }
+        }
+    if (bestDepth < 0.0f) return false;
+    // Then a local search that stays on the front side.
+    float step = 0.04f, bestD = 0.0f;
+    best = miss (bestDir, bestD);
+    for (int iter = 0; iter < 200 && step > 1e-4f; ++iter)
+    {
+        bool improved = false;
+        for (const Vec3 off : { Vec3 (step, 0, 0), Vec3 (-step, 0, 0), Vec3 (0, step, 0), Vec3 (0, -step, 0), Vec3 (0, 0, step), Vec3 (0, 0, -step) })
+        {
+            const Vec3 d = (bestDir + off).normalised();
+            float depth;
+            const float dist = miss (d, depth);
+            if (dist < best && depth > bestD - 0.1f) { best = dist; bestDir = d; bestD = depth; improved = true; }
+        }
+        if (! improved) step *= 0.5f;
+    }
+    direction = bestDir;
+    return best < 0.01f;
+}
+
 void pickupPoints (Body b, Vec3 strike, float spread, Vec3& left, Vec3& right)
 {
     spread = clampT (spread, 0.0f, 1.0f);
@@ -361,8 +421,10 @@ static std::vector<Mode> enumerate (Body b)
         {
             // Shell model: degree l sets the pitch; orders m split slightly (a real
             // sphere is never perfect), much more on the faceted icosahedron.
+            // l = 1 is the free shell moving as a whole (like the circle's tilt), so the
+            // first vibration is l = 2, the "rugby ball" of a singing bowl or bell.
             const bool ico = b == Body::Icosahedron;
-            for (int l = 1; l <= 7; ++l)
+            for (int l = 2; l <= 7; ++l)
                 for (int m = -l; m <= l; ++m)
                 {
                     const double base = std::pow (l * (l + 1.0), ico ? 0.8 : 0.75);
