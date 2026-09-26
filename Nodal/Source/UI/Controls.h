@@ -37,7 +37,7 @@ private:
 
 // A row of buttons for a choice parameter. `shown` picks which choices appear
 // (all by default); `icon` optionally draws a glyph above each label.
-class ChoiceButtons : public juce::Component
+class ChoiceButtons : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     using IconFn = std::function<void (juce::Graphics&, juce::Rectangle<float>, int choice, bool on)>;
@@ -99,11 +99,16 @@ private:
 
 // Mode frequencies drawn against the keyboard of the current key / scale; bar height
 // is how strongly each mode rings right now.
-class Spectrum : public juce::Component
+class Spectrum : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     explicit Spectrum (NodalProcessor& p) : proc (p) {}
     void paint (juce::Graphics&) override;
+    // In key follow / instrument mode the strip is a keyboard: click or drag to play.
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
 private:
     NodalProcessor& proc;
     std::array<float, kMaxModes> smooth {};
@@ -112,6 +117,9 @@ public:
 private:
     std::array<float, kMaxModes> shown {};
     int shownKey = -1, shownScale = -1;
+    int playing = -1;
+    int noteAt (float x) const;
+    bool playable() const;
 };
 
 } // namespace dy::nodal

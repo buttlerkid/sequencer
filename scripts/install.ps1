@@ -4,9 +4,12 @@
 param([ValidateSet("Sequencer", "Nodal")] [string] $Module = "Sequencer", [switch] $User, [string] $Config = "Release")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$product = @{ Sequencer = "DY Sequencer"; Nodal = "DY Nodal" }[$Module]
-$src  = Join-Path $root "build\$Module\DY${Module}_artefacts\$Config\VST3\$product.vst3"
-if (-not (Test-Path $src)) { throw "Build first: $src not found" }
+# target folder -> product name; Nodal ships an effect and an instrument
+$products = @{ Sequencer = @(, @("DYSequencer", "DY Sequencer")); Nodal = @(@("DYNodal", "DY Nodal"), @("DYNodalInstrument", "DY Nodal Instrument")) }[$Module]
+foreach ($pr in $products) {
+    $src = Join-Path $root "build\$Module\$($pr[0])_artefacts\$Config\VST3\$($pr[1]).vst3"
+    if (-not (Test-Path $src)) { throw "Build first: $src not found" }
+}
 
 $dest = if ($User) { Join-Path $env:LOCALAPPDATA "VST3" } else { Join-Path $env:CommonProgramFiles "VST3" }
 
@@ -20,10 +23,13 @@ if (-not $User -and -not $isAdmin) {
 }
 
 New-Item -ItemType Directory -Force $dest | Out-Null
-$target = Join-Path $dest "$product.vst3"
-if (Test-Path $target) { Remove-Item -Recurse -Force $target }
-Copy-Item -Recurse $src $target
-Write-Host "Installed -> $target"
+foreach ($pr in $products) {
+    $src = Join-Path $root "build\$Module\$($pr[0])_artefacts\$Config\VST3\$($pr[1]).vst3"
+    $target = Join-Path $dest "$($pr[1]).vst3"
+    if (Test-Path $target) { Remove-Item -Recurse -Force $target }
+    Copy-Item -Recurse $src $target
+    Write-Host "Installed -> $target"
+}
 if ($User) {
     Write-Host "In Live: Options > Preferences > Plug-Ins > 'Use VST3 Plug-In Custom Folder' = $dest, then Rescan."
 }

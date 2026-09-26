@@ -3,9 +3,16 @@
 A Chladni plate resonator for Ableton Live (VST3, Windows). Whatever you feed it
 sets a virtual plate ringing: the plate's own vibration modes resonate with the
 input, tuned to your key if you want, and the sand on the plate shows which modes
-are sounding.
+are sounding. Or play the plate itself from MIDI.
 
-![DY Nodal](../docs/nodal-v0.3.png)
+It comes as two plugins built from the same code:
+
+| Plugin | Put it on | What it does |
+|---|---|---|
+| **DY Nodal** | any audio track, like a reverb | your audio rings the plate; MIDI can retune it or play it; sidechain input |
+| **DY Nodal Instrument** | a MIDI track | notes play the plate with a mallet, pluck, bow or breath |
+
+![DY Nodal Instrument](../docs/nodal-v0.4.png)
 
 ## What it does
 
@@ -78,18 +85,50 @@ scale, with its current level.
   being moved shows a ring in the source's colour (white when several sources
   share it), and a modulated strike point leaves a hollow handle where it is set.
 
-**Presets.** Fifteen factory starting points in the header (also listed as the
+**Playing it** (the *Play* tab, *Instrument* in the instrument plugin).
+- **Play mode**: *Effect* (the input rings the body, MIDI ignored), *Key follow*
+  (the input rings it, MIDI notes retune it), *Instrument* (MIDI notes play it).
+- **Exciters** for notes: *Mallet* and *Pluck* strike once (Tone goes from soft
+  and dark to hard and bright); *Bow* and *Noise* keep exciting while the key is
+  down, shaped by Attack and Release; *Input* (effect only) lets the audio input
+  sound through each held note, so the plate plays your audio at the notes you
+  hold.
+- **Voices**: up to 8, each a whole body of up to 32 modes. At 1 it is mono and
+  legato notes glide (Glide sets the time). **Key-up** is how much letting go of
+  a key stops the ring: 0 rings on like a bell, 100 % stops it like a damped
+  string. **Velocity** sets how much velocity changes loudness and brightness.
+  Sustain pedal and pitch bend (±2) work; notes start on their exact sample.
+- Mode tuning still applies: in *Scale* the overtones are pulled into the key,
+  but the note you play is never moved.
+- The strip of keys under the plate is a keyboard in Key follow and Instrument
+  mode: click or drag to play (higher on the key is louder). A tap on the plate
+  plays the Body size note.
+- **Sidechain** (effect): *Excites* rings the plate with the sidechain instead of
+  the main input (put it on a pad and send it the drums), *Envelope* makes the
+  input follower listen to the sidechain (duck the plate with the kick).
+
+**Presets.** Twenty-two factory starting points in the header (also listed as the
 plugin's programs in the host): steel plate, brass bowl, glass harmonica, gamelan
 slendro, violin top, crystal shimmer, stepping bell, ducked plate, dark gong, tuned
-drum room, follow the singer, singing sphere, icosa gamelan, crystal cube and
-orbiting strike (an LFO walks the strike point round a steel sphere).
+drum room, follow the singer, singing sphere, icosa gamelan, crystal cube,
+orbiting strike, and for playing: mallet bells, plucked plate, bowed glass,
+breathing bowl, mono glide gong, key follow drone and sidechain ring.
 
 ## Using it in Live
 
-Put it on any audio or instrument track like a reverb. Start with Mix around 50 %,
-pick a key and scale that match the song, choose *Scale* tuning, and set Body size
-to the root. Drums and plucks make it ring like struck metal; pads and vocals
-colour it continuously. Everything except the display style is automatable.
+Put **DY Nodal** on any audio or instrument track like a reverb. Start with Mix
+around 50 %, pick a key and scale that match the song, choose *Scale* tuning, and
+set Body size to the root. Drums and plucks make it ring like struck metal; pads
+and vocals colour it continuously. Everything except the display style is
+automatable.
+
+- **Play the effect from MIDI** (Key follow or Instrument mode): on a MIDI track
+  set *MIDI To* to the DY Nodal track and choose "DY Nodal" in the second box.
+- **Sidechain**: set Play > Sidechain, then pick the source track in the device's
+  sidechain section in Live.
+
+Put **DY Nodal Instrument** on a MIDI track and play; the Mix knob starts at
+100 %.
 
 ## Engine notes
 
@@ -111,12 +150,22 @@ colour it continuously. Everything except the display style is automatable.
   independence, bypass, levels, LFO shapes and song-position sync, envelope
   timing, transient detection, pitch detection (sines, a sawtooth, noise,
   silence), modulation end to end (scale-stepped pitch, pitch follow,
-  envelope ducking), and 3D picking (a point on a turned shell back to the
-  strike knobs, for all three shells from random views).
+  envelope ducking), 3D picking (a point on a turned shell back to the
+  strike knobs, for all three shells from random views), and playing: pitch
+  of a played note, overtones locked without moving the note, levels of every
+  exciter, bow sustain and let-go, key-up damping, polyphony and stealing,
+  chords, mono glide, sustain pedal, pitch bend, taps, voice retirement, key
+  follow, both sidechain modes, and block-size independence with notes landing
+  mid-block.
+- Instrument voices share the per-block work (strike and pickup shapes, damping,
+  tilt); each only adds its own frequencies and decays, so 8 voices of 32 modes
+  cost little more than the modes themselves.
 
 ## Building
 
 From the repository root: `.\scripts\build.ps1`, then
 `.\scripts\install.ps1 -Module Nodal` or `.\scripts\package.ps1 -Module Nodal`.
 `.\scripts\nodal-test.ps1 -Preset 5 -Strike 2` opens the standalone on a preset
-and taps the plate every two seconds, for checking the display hands-free.
+and taps the plate every two seconds, for checking the display hands-free;
+`-Instrument -Notes "57,64,69" -Tab 1` opens the instrument, plays that chord on
+each tick and shows the Instrument tab.

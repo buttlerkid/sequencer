@@ -226,6 +226,44 @@ bool Spectrum::tick()
     return changed;
 }
 
+bool Spectrum::playable() const { return proc.params.playMode->load() > 0.5f; }
+
+int Spectrum::noteAt (float x) const
+{
+    const double lo = 24.0, hi = 108.0;
+    return juce::jlimit (0, 127, static_cast<int> (std::lround (lo + (x / static_cast<float> (getWidth())) * (hi - lo))));
+}
+
+void Spectrum::mouseMove (const juce::MouseEvent&)
+{
+    setMouseCursor (playable() ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+    setTooltip (playable() ? "Click or drag to play notes" : "Mode frequencies against the keyboard of the key and scale");
+}
+
+void Spectrum::mouseDown (const juce::MouseEvent& e)
+{
+    if (! playable()) return;
+    playing = noteAt (e.position.x);
+    const float vel = juce::jlimit (0.2f, 1.0f, 1.1f - e.position.y / static_cast<float> (getHeight()) * 0.8f);   // higher = harder
+    proc.keyboardState.noteOn (1, playing, vel);
+}
+
+void Spectrum::mouseDrag (const juce::MouseEvent& e)
+{
+    if (playing < 0) return;
+    const int n = noteAt (e.position.x);
+    if (n == playing) return;
+    proc.keyboardState.noteOff (1, playing, 0.0f);
+    playing = n;
+    proc.keyboardState.noteOn (1, playing, 0.8f);
+}
+
+void Spectrum::mouseUp (const juce::MouseEvent&)
+{
+    if (playing >= 0) proc.keyboardState.noteOff (1, playing, 0.0f);
+    playing = -1;
+}
+
 void Spectrum::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();

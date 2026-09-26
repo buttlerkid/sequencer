@@ -1,6 +1,7 @@
 #pragma once
 #include "Controls.h"
 #include "NodalLookAndFeel.h"
+#include "PlayPanel.h"
 
 namespace dy::nodal {
 
@@ -60,15 +61,25 @@ private:
     float shownNote = -2.0f, shownClarity = -1.0f;
 };
 
+// The bottom panel: tabs for modulation and for playing (MIDI, exciters, sidechain).
 class ModPanel : public Panel
 {
 public:
     explicit ModPanel (NodalProcessor& p);
     void resized() override;
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
     void tick();
+    void setTab (int t);
 
     LfoSlot lfo1, lfo2;
     InputSlot input;
+    PlayPanel play;
+
+private:
+    juce::Rectangle<int> tabRect (int t) const;
+    NodalProcessor& proc;
+    int tab = 0, shownMode = -1;
 };
 
 } // namespace dy::nodal

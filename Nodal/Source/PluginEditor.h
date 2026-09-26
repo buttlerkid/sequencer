@@ -57,7 +57,8 @@ private:
     juce::ComboBox presetBox;
     juce::TextButton prevPreset { "<" }, nextPreset { ">" };
     juce::Rectangle<int> plateRect;
-    int tick = 0, lastGlKey = -1, testStrikeTicks = 0;   // editor coordinates, for the background hole
+    int tick = 0, lastGlKey = -1, testStrikeTicks = 0;
+    std::vector<int> testNotes;   // editor coordinates, for the background hole
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NodalEditor)
 };

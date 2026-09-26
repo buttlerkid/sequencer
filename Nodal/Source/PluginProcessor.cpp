@@ -3,11 +3,21 @@
 
 namespace dy::nodal {
 
+juce::AudioProcessor::BusesProperties NodalProcessor::makeBuses()
+{
+    using Set = juce::AudioChannelSet;
+    if constexpr (kInstrumentBuild)
+        return BusesProperties().withOutput ("Output", Set::stereo(), true);
+    return BusesProperties().withInput ("Input", Set::stereo(), true)
+                             .withOutput ("Output", Set::stereo(), true)
+                             .withInput ("Sidechain", Set::stereo(), false);
+}
+
 NodalProcessor::NodalProcessor()
-    : AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
-                                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (makeBuses()),
       apvts (*this, nullptr, "Parameters", createParameterLayout())
 {
+    for (auto& v : telemetry.voiceNote) v.store (-1);
     params.bind (apvts);
     (void) modeSet (Body::Square);        // build every body's mode tables now, not on the audio thread
     engine.prepare (48000.0);
@@ -20,10 +30,32 @@ void NodalProcessor::prepareToPlay (double sampleRate, int)
 
 bool NodalProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
+    using Set = juce::AudioChannelSet;
     const auto& out = layouts.getMainOutputChannelSet();
-    const auto& in  = layouts.getMainInputChannelSet();
-    const bool okOut = out == juce::AudioChannelSet::stereo() || out == juce::AudioChannelSet::mono();
-    return okOut && (in == out || in.isDisabled());
+    const bool okOut = out == Set::stereo() || out == Set::mono();
+    if constexpr (kInstrumentBuild) return okOut && layouts.inputBuses.isEmpty();
+    const auto& in = layouts.getMainInputChannelSet();
+    if (! okOut || ! (in == out || in.isDisabled())) return false;
+    if (layouts.inputBuses.size() > 1)
+    {
+        const auto& sc = layouts.inputBuses.getReference (1);
+        return sc.isDisabled() || sc == Set::mono() || sc == Set::stereo();
+    }
+    return true;
+}
+
+void NodalProcessor::handleMidi (const juce::MidiMessage& m)
+{
+    if (m.isNoteOn())
+    {
+        engine.noteOn (m.getNoteNumber(), m.getFloatVelocity());
+        if (params.playMode->load() > 0.5f) telemetry.strikes.fetch_add (1, std::memory_order_relaxed);   // throw the sand
+    }
+    else if (m.isNoteOff())            engine.noteOff (m.getNoteNumber());
+    else if (m.isSustainPedalOn())     engine.sustain (true);
+    else if (m.isSustainPedalOff())    engine.sustain (false);
+    else if (m.isPitchWheel())         engine.pitchBend (static_cast<float> (m.getPitchWheelValue() - 8192) / 8192.0f * 2.0f);
+    else if (m.isAllNotesOff() || m.isAllSoundOff()) engine.allNotesOff();
 }
 
 void NodalProcessor::setParam (const juce::String& id, float plainValue)
@@ -71,6 +103,23 @@ const std::vector<Preset>& factoryPresets()
         { "Orbiting Strike", { { "body", 4 }, { "material", 0 }, { "tuneMode", 0 }, { "pitch", 50 }, { "decay", 5 }, { "damping", 0.15f },
                                { "density", 24 }, { "strikeX", 0.0f }, { "strikeY", 0.25f }, { "lfo1Target", 5 }, { "lfo1Amount", 1.0f },
                                { "lfo1Shape", 2 }, { "lfo1Rate", 0.1f } } },
+        // ---- v0.4: played from MIDI
+        { "Mallet Bells", { { "playMode", 2 }, { "exciter", 0 }, { "body", 1 }, { "material", 1 }, { "tuneMode", 0 }, { "decay", 4 },
+                            { "damping", 0.15f }, { "density", 24 }, { "excTone", 0.55f }, { "noteDamp", 0.2f }, { "mix", 1.0f } } },
+        { "Plucked Plate", { { "playMode", 2 }, { "exciter", 1 }, { "material", 0 }, { "tuneMode", 2 }, { "decay", 2 }, { "damping", 0.35f },
+                             { "density", 20 }, { "excTone", 0.7f }, { "noteDamp", 0.6f }, { "mix", 1.0f }, { "strikeX", 0.7f }, { "strikeY", 0.6f } } },
+        { "Bowed Glass", { { "playMode", 2 }, { "exciter", 2 }, { "body", 4 }, { "material", 2 }, { "tuneMode", 2 }, { "decay", 5 },
+                           { "damping", 0.1f }, { "density", 20 }, { "excAttack", 180 }, { "excRelease", 600 }, { "excTone", 0.45f },
+                           { "noteDamp", 0.3f }, { "mix", 1.0f }, { "lfo2Target", 3 }, { "lfo2Amount", 0.25f }, { "lfo2Rate", 0.2f } } },
+        { "Breathing Bowl", { { "playMode", 2 }, { "exciter", 3 }, { "body", 1 }, { "material", 1 }, { "tuneMode", 1 }, { "decay", 6 },
+                              { "excAttack", 400 }, { "excRelease", 1200 }, { "excTone", 0.3f }, { "noteDamp", 0.1f }, { "polyphony", 6 },
+                              { "mix", 1.0f }, { "brightness", -0.3f } } },
+        { "Mono Glide Gong", { { "playMode", 2 }, { "exciter", 0 }, { "body", 6 }, { "material", 1 }, { "tuneMode", 0 }, { "decay", 8 },
+                               { "polyphony", 1 }, { "glide", 180 }, { "density", 28 }, { "excTone", 0.35f }, { "mix", 1.0f } } },
+        { "Key Follow Drone", { { "playMode", 1 }, { "material", 3 }, { "body", 2 }, { "decay", 10 }, { "damping", 0.05f }, { "glide", 250 },
+                                { "snap", 0 }, { "density", 28 }, { "mix", 0.6f } } },
+        { "Sidechain Ring", { { "sidechain", 1 }, { "material", 0 }, { "body", 0 }, { "decay", 3 }, { "tuneMode", 1 }, { "mix", 0.5f },
+                              { "lowCut", 80 } } },
     };
     return p;
 }
@@ -92,13 +141,29 @@ void NodalProcessor::loadPreset (int index)
         }
 }
 
-void NodalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void NodalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
-    const int inCh = getTotalNumInputChannels(), outCh = getTotalNumOutputChannels();
+    const int inCh = getMainBusNumInputChannels(), outCh = getMainBusNumOutputChannels();
     for (int ch = inCh; ch < outCh; ++ch)
         buffer.clear (ch, 0, n);
+
+    // sidechain (effect build only): the second input bus, if the host connected it
+    const float* scL = nullptr;
+    const float* scR = nullptr;
+    if (getBusCount (true) > 1)
+        if (auto* bus = getBus (true, 1); bus != nullptr && bus->isEnabled())
+        {
+            auto sc = getBusBuffer (buffer, true, 1);
+            if (sc.getNumChannels() > 0)
+            {
+                scL = sc.getReadPointer (0);
+                scR = sc.getNumChannels() > 1 ? sc.getReadPointer (1) : scL;
+            }
+        }
+    telemetry.sidechainConnected.store (scL != nullptr, std::memory_order_relaxed);
+    keyboardState.processNextMidiBuffer (midi, 0, n, true);
 
     engine.setParams (params.read());
 
@@ -121,7 +186,20 @@ void NodalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
     float* L = buffer.getWritePointer (0);
     float* R = outCh > 1 ? buffer.getWritePointer (1) : L;
-    engine.process (L, R, n);
+    // split the block at every MIDI event so notes start on their exact sample
+    int pos = 0;
+    for (const auto meta : midi)
+    {
+        const int at = juce::jlimit (0, n, meta.samplePosition);
+        if (at > pos)
+        {
+            engine.process (L + pos, R + pos, scL != nullptr ? scL + pos : nullptr, scR != nullptr ? scR + pos : nullptr, at - pos);
+            pos = at;
+        }
+        handleMidi (meta.getMessage());
+    }
+    if (pos < n)
+        engine.process (L + pos, R + pos, scL != nullptr ? scL + pos : nullptr, scR != nullptr ? scR + pos : nullptr, n - pos);
 
     // ---- publish for the UI
     const float* e = engine.modeEnergies();
@@ -136,6 +214,12 @@ void NodalProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     telemetry.env.store (engine.envValue(), std::memory_order_relaxed);
     telemetry.heardNote.store (static_cast<float> (engine.heardNote()), std::memory_order_relaxed);
     telemetry.clarity.store (engine.heardClarity(), std::memory_order_relaxed);
+    for (int v = 0; v < kMaxVoices; ++v)
+    {
+        telemetry.voiceNote[static_cast<size_t> (v)].store (engine.voiceNote (v), std::memory_order_relaxed);
+        telemetry.voiceLevel[static_cast<size_t> (v)].store (engine.voiceLevel (v), std::memory_order_relaxed);
+        telemetry.voiceHeld[static_cast<size_t> (v)].store (engine.voiceHeld (v), std::memory_order_relaxed);
+    }
     for (int i = 0; i < kNumModTargets; ++i)
         telemetry.mod[static_cast<size_t> (i)].store (engine.modValue (i), std::memory_order_relaxed);
     if (const int hits = engine.takeOnsets(); hits > 0)
@@ -160,6 +244,7 @@ void NodalProcessor::getStateInformation (juce::MemoryBlock& destData)
     ui.setProperty ("grains", uiGrains, nullptr);
     ui.setProperty ("scale", uiScale, nullptr);
     ui.setProperty ("preset", currentPreset, nullptr);
+    ui.setProperty ("tab", uiTab, nullptr);
     root.addChild (ui, -1, nullptr);
     if (auto xml = root.createXml())
         copyXmlToBinary (*xml, destData);
@@ -182,6 +267,7 @@ void NodalProcessor::setStateInformation (const void* data, int sizeInBytes)
         uiGrains = juce::jlimit (2000, 20000, static_cast<int> (ui.getProperty ("grains", 9000)));
         uiScale  = static_cast<float> (static_cast<double> (ui.getProperty ("scale", 0.8)));
         currentPreset = static_cast<int> (ui.getProperty ("preset", 0));
+        uiTab = juce::jlimit (0, 1, static_cast<int> (ui.getProperty ("tab", 0)));
     }
 }
 

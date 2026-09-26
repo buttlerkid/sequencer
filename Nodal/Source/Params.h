@@ -19,7 +19,18 @@ namespace PID
     inline const juce::String lfoAmount[2] = { "lfo1Amount", "lfo2Amount" };
     inline const juce::String envAttack = "envAttack", envRelease = "envRelease", envTarget = "envTarget", envAmount = "envAmount",
         trackPitch = "trackPitch";
+    // v0.4 playing
+    inline const juce::String playMode = "playMode", exciter = "exciter", excTone = "excTone", excAttack = "excAttack",
+        excRelease = "excRelease", noteDamp = "noteDamp", velSens = "velSens", polyphony = "polyphony", sidechain = "sidechain";
 }
+
+// The same code builds two plugins: the effect (audio in, MIDI optional) and the
+// instrument (MIDI in, no audio input), which Live lists under Instruments.
+#if defined (JucePlugin_IsSynth) && JucePlugin_IsSynth
+inline constexpr bool kInstrumentBuild = true;
+#else
+inline constexpr bool kInstrumentBuild = false;
+#endif
 
 juce::StringArray bodyNames();
 juce::StringArray materialNames();
@@ -29,6 +40,9 @@ juce::StringArray tuneModeNames();
 juce::StringArray modTargetNames();
 juce::StringArray lfoShapeNames();
 juce::StringArray syncDivNames();
+juce::StringArray playModeNames();
+juce::StringArray exciterNames();
+juce::StringArray sidechainNames();
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -41,6 +55,8 @@ struct ParamRefs
                       *spread = nullptr, *lowCut = nullptr, *highCut = nullptr, *drive = nullptr, *mix = nullptr, *output = nullptr;
     std::atomic<float>* lfoRate[2] {}, *lfoSync[2] {}, *lfoDiv[2] {}, *lfoShape[2] {}, *lfoTarget[2] {}, *lfoAmount[2] {};
     std::atomic<float>* envAttack = nullptr, *envRelease = nullptr, *envTarget = nullptr, *envAmount = nullptr, *trackPitch = nullptr;
+    std::atomic<float>* playMode = nullptr, *exciter = nullptr, *excTone = nullptr, *excAttack = nullptr, *excRelease = nullptr,
+                      *noteDamp = nullptr, *velSens = nullptr, *polyphony = nullptr, *sidechain = nullptr;
 
     void bind (juce::AudioProcessorValueTreeState& s);
     EngineParams read() const;

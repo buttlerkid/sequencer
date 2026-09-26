@@ -525,6 +525,244 @@ static void testEngineModulation()
     }
 }
 
+
+// ------------------------------------------------------------------ v0.4: playing
+struct MidiEv { int at; int type; int note; float vel; };     // type 0 on, 1 off, 2 pedal down, 3 pedal up, 4 bend
+
+// The engine over `samples` with MIDI applied at exact sample positions, the way
+// the processor splits its blocks.
+static std::vector<float> runMidi (NodalEngine& e, int samples, std::vector<MidiEv> evs, int block,
+                                   std::vector<float>* right = nullptr, const std::vector<float>* input = nullptr,
+                                   const std::vector<float>* side = nullptr)
+{
+    std::vector<float> L (static_cast<size_t> (samples), 0.0f), R = L;
+    if (input != nullptr) { L = *input; R = *input; L.resize (static_cast<size_t> (samples)); R.resize (static_cast<size_t> (samples)); }
+    std::stable_sort (evs.begin(), evs.end(), [] (const MidiEv& a, const MidiEv& b) { return a.at < b.at; });
+    size_t ei = 0;
+    auto apply = [&] (const MidiEv& ev)
+    {
+        switch (ev.type)
+        {
+            case 0: e.noteOn (ev.note, ev.vel); break;
+            case 1: e.noteOff (ev.note); break;
+            case 2: e.sustain (true); break;
+            case 3: e.sustain (false); break;
+            default: e.pitchBend (ev.vel); break;
+        }
+    };
+    for (int pos = 0; pos < samples; pos += block)
+    {
+        const int end = std::min (samples, pos + block);
+        int cur = pos;
+        while (cur < end)
+        {
+            while (ei < evs.size() && evs[ei].at <= cur) apply (evs[ei++]);
+            const int next = (ei < evs.size() && evs[ei].at < end) ? evs[ei].at : end;
+            if (next > cur)
+            {
+                const float* sc = side != nullptr ? side->data() + cur : nullptr;
+                e.process (L.data() + cur, R.data() + cur, sc, sc, next - cur);
+            }
+            cur = next;
+        }
+    }
+    if (right != nullptr) *right = R;
+    return L;
+}
+
+static double goertzel (const std::vector<float>& v, size_t from, size_t to, double hz, double sr)
+{
+    const double w = 2.0 * kPi * hz / sr, c = 2.0 * std::cos (w);
+    double s1 = 0, s2 = 0;
+    for (size_t i = from; i < to; ++i)
+    {
+        const double win = 0.5 - 0.5 * std::cos (2.0 * kPi * (i - from) / double (to - from));
+        const double s0 = v[i] * win + c * s1 - s2;
+        s2 = s1; s1 = s0;
+    }
+    return std::sqrt (std::max (0.0, s1 * s1 + s2 * s2 - c * s1 * s2)) / double (to - from);
+}
+
+static void testInstrument()
+{
+    std::puts ("Instrument");
+    const double sr = 48000.0;
+    const int S = static_cast<int> (sr);
+    auto base = []
+    {
+        EngineParams p;
+        p.playMode = PlayInstrument; p.tuneMode = TuneFree; p.mix = 1.0; p.glideMs = 0;
+        return p;
+    };
+    auto peakOf = [] (const std::vector<float>& v, size_t from, size_t to)
+    {
+        float m = 0; for (size_t i = from; i < to; ++i) m = std::max (m, std::abs (v[i])); return m;
+    };
+
+    {   // one mode: a pure tone at the played note
+        EngineParams p = base(); p.density = 1; p.decay = 3.0;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        auto out = runMidi (e, S, { { 100, 0, 69, 1.0f } }, 512);
+        CHECK_NEAR (zeroCrossingHz (out, static_cast<size_t> (sr * 0.1), static_cast<size_t> (sr * 0.9), sr), 440.0, 2.0);
+        CHECK (e.activeVoices() == 1 && e.voiceNote (0) == 69);
+        CHECK_NEAR (e.currentNote(), 69.0, 1e-9);
+    }
+    {   // Scale lock pulls the overtones, never the note you played
+        EngineParams p = base(); p.density = 1; p.tuneMode = TuneScale; p.scale = 1;     // C major
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        auto out = runMidi (e, S / 2, { { 0, 0, 61, 1.0f } }, 256);
+        CHECK_NEAR (zeroCrossingHz (out, static_cast<size_t> (sr * 0.05), static_cast<size_t> (sr * 0.45), sr), noteToHz (61), 1.5);
+    }
+    {   // every exciter makes a sound in a sane range, and nothing clips
+        Rng rng (5);
+        std::vector<float> noise (static_cast<size_t> (S)); for (auto& x : noise) x = rng.bipolar() * 0.3f;
+        for (int ex = 0; ex < kNumExciters; ++ex)
+        {
+            EngineParams p = base(); p.exciter = ex; p.tuneMode = TuneScale;
+            NodalEngine e; e.prepare (sr); e.setParams (p);
+            auto out = runMidi (e, S, { { 0, 0, 60, 1.0f }, { S / 2, 1, 60, 0.0f } }, 512, nullptr, ex == ExcInput ? &noise : nullptr);
+            const double level = gainToDb (static_cast<float> (rms (out, 0, static_cast<size_t> (S / 2))));
+            std::printf ("    %-7s %6.1f dBFS rms, peak %.2f\n", exciterName (ex), level, peakOf (out, 0, out.size()));
+            CHECK (level > -40.0 && level < -3.0);
+            CHECK (peakOf (out, 0, out.size()) <= 1.0f);
+        }
+    }
+    {   // a bow keeps the body singing while the key is down, and lets go after
+        EngineParams p = base(); p.exciter = ExcBow; p.excAttackMs = 80; p.excReleaseMs = 150; p.noteDamp = 0.6; p.decay = 1.5;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        auto out = runMidi (e, 3 * S, { { 0, 0, 57, 0.8f }, { 2 * S, 1, 57, 0.0f } }, 512);
+        const double early = rms (out, static_cast<size_t> (sr * 0.3), static_cast<size_t> (sr * 0.6));
+        const double late  = rms (out, static_cast<size_t> (sr * 1.6), static_cast<size_t> (sr * 1.9));
+        const double after = rms (out, static_cast<size_t> (sr * 2.7), static_cast<size_t> (sr * 3.0));
+        CHECK (late > early * 0.5);
+        CHECK (after < late * 0.05);
+    }
+    {   // release damping: 1 stops the ring when the key comes up, 0 lets it ring
+        double tail[2];
+        for (int k = 0; k < 2; ++k)
+        {
+            EngineParams p = base(); p.noteDamp = k == 0 ? 1.0 : 0.0; p.decay = 2.5;
+            NodalEngine e; e.prepare (sr); e.setParams (p);
+            auto out = runMidi (e, S, { { 0, 0, 60, 1.0f }, { static_cast<int> (sr * 0.3), 1, 60, 0.0f } }, 512);
+            tail[k] = rms (out, static_cast<size_t> (sr * 0.7), static_cast<size_t> (sr * 0.9)) / rms (out, static_cast<size_t> (sr * 0.1), static_cast<size_t> (sr * 0.3));
+        }
+        CHECK (tail[0] < 0.01);
+        CHECK (tail[1] > 0.1);
+    }
+    {   // polyphony, stealing and mono
+        EngineParams p = base();
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        (void) runMidi (e, 2048, { { 0, 0, 60, 1 }, { 10, 0, 64, 1 }, { 20, 0, 67, 1 } }, 512);
+        CHECK (e.activeVoices() == 3);
+        std::vector<MidiEv> many;
+        for (int i = 0; i < 10; ++i) many.push_back ({ i * 40, 0, 48 + i, 1.0f });
+        (void) runMidi (e, 2048, many, 512);
+        CHECK (e.activeVoices() == kMaxVoices);
+        bool newest = false;
+        for (int v = 0; v < kMaxVoices; ++v) newest |= e.voiceNote (v) == 57;
+        CHECK (newest);
+        p.polyphony = 1; e.setParams (p); e.reset();
+        (void) runMidi (e, 2048, { { 0, 0, 60, 1 }, { 10, 0, 64, 1 }, { 20, 0, 67, 1 } }, 512);
+        CHECK (e.activeVoices() == 1 && e.voiceNote (0) == 67);
+    }
+    {   // a chord: both notes sound
+        EngineParams p = base(); p.density = 1;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        auto out = runMidi (e, S, { { 0, 0, 60, 1 }, { 0, 0, 67, 1 } }, 512);
+        const double c = goertzel (out, 4800, 43200, noteToHz (60), sr), g = goertzel (out, 4800, 43200, noteToHz (67), sr);
+        const double between = goertzel (out, 4800, 43200, noteToHz (64), sr);
+        CHECK (c > between * 20.0 && g > between * 20.0);
+    }
+    {   // mono legato glides; a detached note jumps
+        EngineParams p = base(); p.polyphony = 1; p.glideMs = 100;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        (void) runMidi (e, 4800, { { 0, 0, 60, 1 } }, 256);
+        (void) runMidi (e, 960, { { 0, 0, 72, 1 } }, 256);                   // still holding 60
+        CHECK (e.currentNote() > 60.5 && e.currentNote() < 71.5);
+        (void) runMidi (e, S, {}, 256);
+        CHECK_NEAR (e.currentNote(), 72.0, 0.01);
+        (void) runMidi (e, 4800, { { 0, 1, 72, 0 }, { 0, 1, 60, 0 } }, 256);
+        (void) runMidi (e, 256, { { 0, 0, 48, 1 } }, 256);
+        CHECK_NEAR (e.currentNote(), 48.0, 1e-9);
+    }
+    {   // the sustain pedal holds released keys
+        EngineParams p = base();
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        (void) runMidi (e, 4096, { { 0, 2, 0, 0 }, { 10, 0, 62, 1 }, { 2000, 1, 62, 0 } }, 512);
+        CHECK (e.voiceHeld (0));
+        (void) runMidi (e, 1024, { { 0, 3, 0, 0 } }, 512);
+        CHECK (! e.voiceHeld (0));
+    }
+    {   // pitch bend moves every voice
+        EngineParams p = base(); p.density = 1;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        auto out = runMidi (e, S, { { 0, 4, 0, 2.0f }, { 0, 0, 69, 1 } }, 512);
+        CHECK_NEAR (zeroCrossingHz (out, static_cast<size_t> (sr * 0.1), static_cast<size_t> (sr * 0.9), sr), noteToHz (71), 2.5);
+    }
+    {   // a tap plays the dial's note with a mallet and lets go by itself
+        EngineParams p = base(); p.pitch = 55;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        (void) runMidi (e, 512, {}, 512);
+        e.strike (0.9f);
+        auto out = runMidi (e, S, {}, 512);
+        CHECK (e.voiceNote (0) == 55);
+        CHECK (rms (out, 0, 9600) > 1e-3);
+        CHECK (! e.voiceHeld (0));
+    }
+    {   // voices that have rung out are retired
+        EngineParams p = base(); p.noteDamp = 1.0;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        (void) runMidi (e, 3 * S, { { 0, 0, 60, 1 }, { 4800, 1, 60, 0 } }, 512);
+        CHECK (e.activeVoices() == 0);
+    }
+    {   // block-size independence with notes landing mid-block
+        EngineParams p = base(); p.exciter = ExcBow; p.tuneMode = TuneScale; p.lfo[0].target = ModBrightness; p.lfo[0].amount = 0.5;
+        std::vector<MidiEv> evs = { { 37, 0, 60, 0.7f }, { 5000, 0, 64, 0.9f }, { 9001, 0, 67, 0.4f }, { 20000, 1, 64, 0 },
+                                    { 30011, 0, 72, 1.0f }, { 40000, 1, 60, 0 } };
+        NodalEngine a, b; a.prepare (sr); b.prepare (sr); a.setParams (p); b.setParams (p);
+        auto oa = runMidi (a, S, evs, 64), ob = runMidi (b, S, evs, 700);
+        double diff = 0; for (size_t i = 0; i < oa.size(); ++i) diff = std::max (diff, double (std::abs (oa[i] - ob[i])));
+        CHECK (diff < 1e-6);
+        CHECK (rms (oa, 0, oa.size()) > 1e-3);
+    }
+}
+
+static void testPlayModes()
+{
+    std::puts ("Key follow and sidechain");
+    const double sr = 48000.0;
+    const int S = static_cast<int> (sr);
+    {   // key follow: the plate retunes to the last key, and stays there
+        EngineParams p; p.playMode = PlayKeyFollow; p.glideMs = 0; p.snap = false; p.pitch = 48;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        (void) runMidi (e, 1024, { { 0, 0, 64, 1 } }, 256);
+        CHECK_NEAR (e.currentNote(), 64.0, 1e-9);
+        (void) runMidi (e, 1024, { { 0, 1, 64, 0 } }, 256);
+        CHECK_NEAR (e.currentNote(), 64.0, 1e-9);
+        p.playMode = PlayEffect; e.setParams (p);                            // effect mode ignores notes
+        (void) runMidi (e, 1024, { { 0, 0, 70, 1 } }, 256);
+        CHECK_NEAR (e.currentNote(), 48.0, 1e-9);
+    }
+    Rng rng (9);
+    std::vector<float> noise (static_cast<size_t> (S)); for (auto& x : noise) x = rng.bipolar() * 0.3f;
+    {   // sidechain excites: a silent main input still rings the plate
+        EngineParams p; p.sidechain = ScExcites; p.mix = 1.0;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        auto out = runMidi (e, S, {}, 512, nullptr, nullptr, &noise);
+        CHECK (rms (out, 0, out.size()) > 1e-3);
+        p.sidechain = ScOff; NodalEngine f; f.prepare (sr); f.setParams (p);
+        auto quiet = runMidi (f, S, {}, 512, nullptr, nullptr, &noise);
+        CHECK (rms (quiet, 0, quiet.size()) == 0.0);
+    }
+    {   // sidechain envelope: the follower listens to the sidechain, the plate to the main input
+        EngineParams p; p.sidechain = ScEnvelope;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        auto out = runMidi (e, S, {}, 512, nullptr, nullptr, &noise);
+        CHECK (e.envValue() > 0.5f);
+        CHECK (rms (out, 0, out.size()) == 0.0);
+    }
+}
+
 int main()
 {
     testBessel();
@@ -535,6 +773,8 @@ int main()
     testModulation();
     testPitchTracker();
     testEngineModulation();
+    testInstrument();
+    testPlayModes();
     std::printf ("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

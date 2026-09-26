@@ -4,8 +4,12 @@ param([ValidateSet("Sequencer", "Nodal")] [string] $Module = "Sequencer", [strin
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $product = @{ Sequencer = "DY Sequencer"; Nodal = "DY Nodal" }[$Module]
-$src  = Join-Path $root "build\$Module\DY${Module}_artefacts\$Config\VST3\$product.vst3"
-if (-not (Test-Path $src)) { throw "Build first: $src not found" }
+# target folder -> product name; Nodal ships an effect and an instrument
+$products = @{ Sequencer = @(, @("DYSequencer", "DY Sequencer")); Nodal = @(@("DYNodal", "DY Nodal"), @("DYNodalInstrument", "DY Nodal Instrument")) }[$Module]
+foreach ($pr in $products) {
+    $src = Join-Path $root "build\$Module\$($pr[0])_artefacts\$Config\VST3\$($pr[1]).vst3"
+    if (-not (Test-Path $src)) { throw "Build first: $src not found" }
+}
 
 $version = (Select-String -Path (Join-Path $root "$Module\CMakeLists.txt") -Pattern 'set\(DY_\w+_VERSION ([0-9.]+)\)').Matches[0].Groups[1].Value
 $dist  = Join-Path $root "dist"
@@ -14,20 +18,36 @@ $stage = Join-Path $dist "$slug-$version"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force $stage | Out-Null
 
-Copy-Item -Recurse $src (Join-Path $stage "$product.vst3")
+foreach ($pr in $products) {
+    Copy-Item -Recurse (Join-Path $root "build\$Module\$($pr[0])_artefacts\$Config\VST3\$($pr[1]).vst3") (Join-Path $stage "$($pr[1]).vst3")
+}
 Copy-Item (Join-Path $root "LICENSE") $stage
 $readme = if ($Module -eq "Nodal") {
 @"
-DY Nodal $version  (Windows x64, VST3 audio effect)
-===================================================
+DY Nodal $version  (Windows x64, VST3)
+======================================
+
+Two plugins:
+  DY Nodal             audio effect: your audio rings a Chladni plate
+  DY Nodal Instrument  instrument: MIDI notes play the plate
 
 INSTALL
-  1. Copy the folder  "DY Nodal.vst3"  into
+  1. Copy both folders  "DY Nodal.vst3"  and  "DY Nodal Instrument.vst3"  into
         C:\Program Files\Common Files\VST3\
      (you will be asked for administrator permission)
   2. Ableton Live: Options > Preferences > Plug-Ins
         "Use VST3 Plug-In System Folders" = On, then click Rescan.
-  3. Browser > Plug-Ins > VST3 > dy > DY Nodal  ->  drag onto any audio or instrument track.
+  3. Browser > Plug-Ins > VST3 > dy:
+        DY Nodal             -> drag onto any audio or instrument track (like a reverb)
+        DY Nodal Instrument  -> drag onto a MIDI track and play
+
+TRY
+  Click the plate to strike it and pick a preset at the top. In the instrument,
+  click the keyboard strip under the plate to play notes.
+  Effect + MIDI: Play tab > Key follow or Instrument; then on a MIDI track set
+  MIDI To = the DY Nodal track, second box = "DY Nodal".
+  Sidechain (effect): Play tab > Sidechain > Excites, then choose the source in
+  the plugin's sidechain input in Live.
 
 Source & updates: https://github.com/buttlerkid/sequencer
 "@

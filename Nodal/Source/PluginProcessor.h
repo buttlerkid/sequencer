@@ -16,6 +16,10 @@ struct Telemetry
     std::atomic<uint32_t> strikes { 0 };        // bumps on every tap / transient, for the sand "kick"
     std::atomic<float>    lfo1 { 0.0f }, lfo2 { 0.0f }, env { 0.0f }, heardNote { -1.0f }, clarity { 0.0f };
     std::array<std::atomic<float>, kNumModTargets> mod {};     // summed modulation per target
+    std::array<std::atomic<int>, kMaxVoices>   voiceNote {};     // -1 idle
+    std::array<std::atomic<float>, kMaxVoices> voiceLevel {};
+    std::array<std::atomic<bool>, kMaxVoices>  voiceHeld {};
+    std::atomic<bool> sidechainConnected { false };
 };
 
 struct Preset
@@ -34,6 +38,7 @@ public:
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void handleMidi (const juce::MidiMessage&);
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -65,15 +70,18 @@ public:
     int  currentPreset = 0;
 
     juce::AudioProcessorValueTreeState apvts;
+    juce::MidiKeyboardState keyboardState;     // notes played on the editor's keyboard strip
     ParamRefs params;
     Telemetry telemetry;
 
     // Editor preferences (saved with the state)
     int   uiView = 0;          // 0 sand, 1 lines, 2 field
     int   uiGrains = 9000;
+    int   uiTab = 0;           // bottom panel: 0 modulation, 1 play
     float uiScale = 0.8f;
 
 private:
+    static BusesProperties makeBuses();
     NodalEngine engine;
     std::atomic<float> pendingStrike { -1.0f };
 

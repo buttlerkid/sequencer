@@ -131,7 +131,14 @@ NodalEditor::NodalEditor (NodalProcessor& p)
         }
     // DY_NODAL_TEST_STRIKE=<seconds> taps the plate at that interval.
     if (p.wrapperType == juce::AudioProcessor::wrapperType_Standalone)
+    {
         testStrikeTicks = juce::roundToInt (60.0 * juce::SystemStats::getEnvironmentVariable ("DY_NODAL_TEST_STRIKE", "0").getDoubleValue());
+        // DY_NODAL_TEST_NOTES=60,64,67 plays those notes (held 1 s) instead of tapping; DY_NODAL_TEST_TAB=1 opens the play tab
+        for (auto& t : juce::StringArray::fromTokens (juce::SystemStats::getEnvironmentVariable ("DY_NODAL_TEST_NOTES", {}), ",", {}))
+            if (t.trim().isNotEmpty()) testNotes.push_back (t.trim().getIntValue());
+        const auto tab = juce::SystemStats::getEnvironmentVariable ("DY_NODAL_TEST_TAB", {});
+        if (tab.isNotEmpty()) modPanel.setTab (tab.getIntValue());
+    }
 
     gl.setPreferredVersion (juce::OpenGLVersion { 3, 2 });
     gl.setRenderer (this);
@@ -310,7 +317,13 @@ void NodalEditor::timerCallback()
     const int glKey = proc.telemetry.body.load() * 10 + viewState.view.load();
     if (viewState.busy.load() || glKey != lastGlKey || tick % 15 == 0) gl.triggerRepaint();
     lastGlKey = glKey;
-    if (testStrikeTicks > 0 && tick % testStrikeTicks == 0) proc.requestStrike (0.9f);
+    if (testStrikeTicks > 0 && tick % testStrikeTicks == 0)
+    {
+        if (testNotes.empty()) proc.requestStrike (0.9f);
+        else for (int n : testNotes) proc.keyboardState.noteOn (1, n, 0.85f);
+    }
+    if (testStrikeTicks > 0 && ! testNotes.empty() && tick % testStrikeTicks == std::min (60, testStrikeTicks - 1))
+        for (int n : testNotes) proc.keyboardState.noteOff (1, n, 0.0f);
     if (++tick % 2 != 0) return;              // UI widgets at 30 Hz
     meters.tick();
     (void) spectrum.tick();

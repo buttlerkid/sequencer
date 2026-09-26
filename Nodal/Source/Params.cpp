@@ -10,6 +10,9 @@ juce::StringArray tuneModeNames() { return { "Free", "Scale", "Harmonic" }; }
 juce::StringArray modTargetNames() { juce::StringArray a; for (int i = 0; i < kNumModTargets; ++i) a.add (modTargetName (i)); return a; }
 juce::StringArray lfoShapeNames()  { juce::StringArray a; for (int i = 0; i < kNumLfoShapes; ++i) a.add (lfoShapeName (i)); return a; }
 juce::StringArray syncDivNames()   { juce::StringArray a; for (auto& d : kSyncDivs) a.add (d.name); return a; }
+juce::StringArray playModeNames()  { juce::StringArray a; for (int i = 0; i < kNumPlayModes; ++i) a.add (playModeName (i)); return a; }
+juce::StringArray exciterNames()   { juce::StringArray a; for (int i = 0; i < kNumExciters; ++i) a.add (exciterName (i)); return a; }
+juce::StringArray sidechainNames() { juce::StringArray a; for (int i = 0; i < kNumSidechainModes; ++i) a.add (sidechainModeName (i)); return a; }
 
 static juce::String noteText (float note)
 {
@@ -58,7 +61,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::drive), "Drive", NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 6.0f,
                                                    AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction ([] (float v, int)
                                                    { return (v > 0.05f ? "+" : "") + String (v, 1) + " dB"; })));
-    l.add (std::make_unique<AudioParameterFloat>  (id (PID::mix), "Mix", NormalisableRange<float> (0.0f, 1.0f), 0.7f,
+    l.add (std::make_unique<AudioParameterFloat>  (id (PID::mix), "Mix", NormalisableRange<float> (0.0f, 1.0f), kInstrumentBuild ? 1.0f : 0.7f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (pct)));
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::output), "Output", NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f,
                                                    AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction ([] (float v, int)
@@ -87,6 +90,24 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::envAmount), "Envelope Amount", NormalisableRange<float> (-1.0f, 1.0f), 0.5f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction (bip)));
     l.add (std::make_unique<AudioParameterBool>   (id (PID::trackPitch), "Follow Input Pitch", false));
+
+    // ---- playing
+    auto ms = [] (float v, int) { return v < 10.0f ? String (v, 1) + " ms" : v < 1000.0f ? String (roundToInt (v)) + " ms" : String (v / 1000.0f, 2) + " s"; };
+    l.add (std::make_unique<AudioParameterChoice> (id (PID::playMode), "Play Mode", playModeNames(), kInstrumentBuild ? PlayInstrument : PlayEffect));
+    l.add (std::make_unique<AudioParameterChoice> (id (PID::exciter), "Exciter", exciterNames(), ExcMallet));
+    l.add (std::make_unique<AudioParameterFloat>  (id (PID::excTone), "Exciter Tone", NormalisableRange<float> (0.0f, 1.0f), 0.5f,
+                                                   AudioParameterFloatAttributes().withStringFromValueFunction (pct)));
+    l.add (std::make_unique<AudioParameterFloat>  (id (PID::excAttack), "Exciter Attack", skewed (0.5f, 2000.0f, 60.0f), 5.0f,
+                                                   AudioParameterFloatAttributes().withLabel ("ms").withStringFromValueFunction (ms)));
+    l.add (std::make_unique<AudioParameterFloat>  (id (PID::excRelease), "Exciter Release", skewed (5.0f, 3000.0f, 250.0f), 200.0f,
+                                                   AudioParameterFloatAttributes().withLabel ("ms").withStringFromValueFunction (ms)));
+    l.add (std::make_unique<AudioParameterFloat>  (id (PID::noteDamp), "Release Damping", NormalisableRange<float> (0.0f, 1.0f), 0.3f,
+                                                   AudioParameterFloatAttributes().withStringFromValueFunction (pct)));
+    l.add (std::make_unique<AudioParameterFloat>  (id (PID::velSens), "Velocity", NormalisableRange<float> (0.0f, 1.0f), 0.7f,
+                                                   AudioParameterFloatAttributes().withStringFromValueFunction (pct)));
+    l.add (std::make_unique<AudioParameterInt>    (id (PID::polyphony), "Voices", 1, kMaxVoices, kMaxVoices,
+                                                   AudioParameterIntAttributes().withStringFromValueFunction ([] (int v, int) { return v == 1 ? String ("Mono") : String (v); })));
+    l.add (std::make_unique<AudioParameterChoice> (id (PID::sidechain), "Sidechain", sidechainNames(), ScOff));
     return l;
 }
 
@@ -105,6 +126,9 @@ void ParamRefs::bind (juce::AudioProcessorValueTreeState& s)
     }
     envAttack = g (PID::envAttack); envRelease = g (PID::envRelease); envTarget = g (PID::envTarget); envAmount = g (PID::envAmount);
     trackPitch = g (PID::trackPitch);
+    playMode = g (PID::playMode); exciter = g (PID::exciter); excTone = g (PID::excTone); excAttack = g (PID::excAttack);
+    excRelease = g (PID::excRelease); noteDamp = g (PID::noteDamp); velSens = g (PID::velSens); polyphony = g (PID::polyphony);
+    sidechain = g (PID::sidechain);
 }
 
 EngineParams ParamRefs::read() const
@@ -124,6 +148,11 @@ EngineParams ParamRefs::read() const
     }
     e.env.attackMs = f (envAttack); e.env.releaseMs = f (envRelease); e.env.target = i (envTarget); e.env.amount = f (envAmount);
     e.trackPitch = trackPitch->load() > 0.5f;
+    e.playMode = i (playMode); e.exciter = i (exciter); e.excTone = f (excTone); e.excAttackMs = f (excAttack);
+    e.excReleaseMs = f (excRelease); e.noteDamp = f (noteDamp); e.velSens = f (velSens); e.polyphony = i (polyphony);
+    e.sidechain = i (sidechain);
+    if constexpr (kInstrumentBuild)
+        if (e.exciter == ExcInput) e.exciter = ExcNoise;                   // no audio input to play with
     return e;
 }
 

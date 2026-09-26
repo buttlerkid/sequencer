@@ -209,17 +209,66 @@ void InputSlot::tick()
 
 // ------------------------------------------------------------------ panel
 ModPanel::ModPanel (NodalProcessor& p)
-    : Panel ("Modulation"), lfo1 (p, 0, Colours::brass), lfo2 (p, 1, Colours::teal), input (p)
+    : Panel (juce::String()), lfo1 (p, 0, Colours::brass), lfo2 (p, 1, Colours::teal), input (p), play (p), proc (p)
 {
-    addAndMakeVisible (lfo1);
-    addAndMakeVisible (lfo2);
-    addAndMakeVisible (input);
+    setInterceptsMouseClicks (true, true);
+    addChildComponent (lfo1);
+    addChildComponent (lfo2);
+    addChildComponent (input);
+    addChildComponent (play);
+    setTab (p.uiTab);
+}
+
+juce::Rectangle<int> ModPanel::tabRect (int t) const
+{
+    return { 10 + t * 112, 5, 104, 20 };
+}
+
+void ModPanel::setTab (int t)
+{
+    tab = juce::jlimit (0, 1, t);
+    proc.uiTab = tab;
+    lfo1.setVisible (tab == 0);
+    lfo2.setVisible (tab == 0);
+    input.setVisible (tab == 0);
+    play.setVisible (tab == 1);
+    repaint();
+}
+
+void ModPanel::paint (juce::Graphics& g)
+{
+    Panel::paint (g);
+    const char* names[2] = { "MODULATION", kInstrumentBuild ? "INSTRUMENT" : "PLAY" };
+    for (int t = 0; t < 2; ++t)
+    {
+        const auto r = tabRect (t);
+        const bool on = t == tab;
+        g.setColour (on ? Colours::brass : Colours::dim);
+        g.setFont (displayFont (10.5f));
+        g.drawText (names[t], r.withTrimmedLeft (2), juce::Justification::centredLeft);
+        if (on) g.fillRect (static_cast<float> (r.getX() + 2), static_cast<float> (r.getBottom() - 2), static_cast<float> (r.getWidth() - 12), 1.5f);
+    }
+    // the play tab says what mode the plugin is in, from either tab
+    if constexpr (! kInstrumentBuild)
+    if (shownMode > PlayEffect)
+    {
+        g.setColour (Colours::teal);
+        g.setFont (monoFont (10.5f));
+        g.drawText (juce::String (playModeName (shownMode)).toLowerCase(), tabRect (1).translated (62, 0).withWidth (90), juce::Justification::centredLeft);
+    }
+}
+
+void ModPanel::mouseDown (const juce::MouseEvent& e)
+{
+    for (int t = 0; t < 2; ++t)
+        if (tabRect (t).contains (e.getPosition())) setTab (t);
 }
 
 void ModPanel::resized()
 {
     auto r = getLocalBounds().reduced (10, 8);
     r.removeFromTop (20);
+    play.setBounds (r);
     lfo1.setBounds (r.removeFromLeft (318));
     r.removeFromLeft (10);
     lfo2.setBounds (r.removeFromLeft (318));
@@ -229,9 +278,16 @@ void ModPanel::resized()
 
 void ModPanel::tick()
 {
-    lfo1.tick();
-    lfo2.tick();
-    input.tick();
+    if (tab == 0)
+    {
+        lfo1.tick();
+        lfo2.tick();
+        input.tick();
+    }
+    else
+        play.tick();
+    const int m = static_cast<int> (std::lround (proc.params.playMode->load()));
+    if (m != shownMode) { shownMode = m; repaint (tabRect (1).translated (62, 0).withWidth (100)); }
 }
 
 } // namespace dy::nodal
