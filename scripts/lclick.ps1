@@ -2,7 +2,8 @@
 # so it works at any window scale. Also: -Park moves the window top-most (without
 # activating it) to the given screen position/width, -Unpark restores normal z-order.
 param([int] $X = -1, [int] $Y = -1, [int] $ToX = -1, [int] $ToY = -1, [switch] $Double,
-      [switch] $Park, [int] $ParkX = 2560, [int] $ParkY = 0, [int] $ParkW = 900, [switch] $Unpark)
+      [switch] $Park, [int] $ParkX = 2560, [int] $ParkY = 0, [int] $ParkW = 900, [switch] $Unpark,
+      [string] $App = "DY Sequencer", [int] $LW = 1200, [int] $LH = 740)
 Add-Type @"
 using System; using System.Runtime.InteropServices;
 public class LC {
@@ -15,15 +16,15 @@ public class LC {
 }
 "@
 [LC]::SetProcessDPIAware() | Out-Null
-$p = Get-Process | Where-Object { $_.ProcessName -like "DY Sequencer*" } | Select-Object -First 1
+$p = Get-Process | Where-Object { $_.ProcessName -like "$App*" } | Select-Object -First 1
 if (-not $p) { throw "standalone not running" }
 $h = $p.MainWindowHandle
 $SWP_NOACTIVATE = 0x10; $SWP_NOSIZE = 1; $SWP_NOMOVE = 2
 if ($Park) {
     $wr = New-Object LC+R; [LC]::GetWindowRect($h, [ref]$wr) | Out-Null
     $cr = New-Object LC+R; [LC]::GetClientRect($h, [ref]$cr) | Out-Null
-    $titleH = ($wr.B - $wr.T) - 740.0 * ($cr.Rt / 1200.0)
-    $s = ($ParkW - 2) / 1200.0
+    $titleH = ($wr.B - $wr.T) - $LH * ($cr.Rt / $LW)
+    $s = ($ParkW - 2) / $LW
     $newH = [int](740 * $s + $titleH + 2)
     [LC]::SetWindowPos($h, [IntPtr](-1), $ParkX, $ParkY, $ParkW, $newH, $SWP_NOACTIVATE) | Out-Null
     Start-Sleep -Milliseconds 400
@@ -36,8 +37,8 @@ if ($Unpark) {
 if ($X -lt 0) { return }
 
 $cr = New-Object LC+R; [LC]::GetClientRect($h, [ref]$cr) | Out-Null
-$s = $cr.Rt / 1200.0
-$titleH = $cr.B - 740.0 * $s
+$s = $cr.Rt / $LW
+$titleH = $cr.B - $LH * $s
 function map([int]$lx, [int]$ly) { return @([int]($lx * $s), [int]($titleH + $ly * $s)) }
 function lp([int]$x, [int]$y) { [IntPtr](($y -shl 16) -bor ($x -band 0xFFFF)) }
 $c = map $X $Y; $cx = $c[0]; $cy = $c[1]

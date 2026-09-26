@@ -7,7 +7,7 @@ scripts.
 | Module | What it is | Status |
 |---|---|---|
 | [Sequencer](Sequencer/README.md) | DY Sequencer: 16-track Euclidean, scale-aware MIDI step sequencer with patterns, chains, conditions and chord follow | v0.4.0 |
-| [Nodal](Nodal/) | DY Nodal: Chladni plate resonator. Tuned modal resonances with a scale-stepped body size, a sand visualizer, later a 3D view and an instrument mode | in development |
+| [Nodal](Nodal/README.md) | DY Nodal: Chladni plate resonator. Up to 32 tuned plate modes, body size stepped through a scale, six materials, and GPU sand that shows which modes are ringing | v0.1.0 |
 
 ![DY Sequencer](docs/screenshot-v0.4-dark.png)
 

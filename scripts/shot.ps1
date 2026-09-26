@@ -1,5 +1,5 @@
 # Capture the DY Sequencer standalone window to a PNG (z-order independent).
-param([string] $Out = "build\shots\standalone.png")
+param([string] $Out = "build\shots\standalone.png", [string] $App = "DY Sequencer")
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System; using System.Runtime.InteropServices;
@@ -9,7 +9,7 @@ public class Shot {
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
 }
 "@
-$p = Get-Process | Where-Object { $_.ProcessName -like "DY Sequencer*" } | Select-Object -First 1
+$p = Get-Process | Where-Object { $_.ProcessName -like "$App*" } | Select-Object -First 1
 if (-not $p) { throw "standalone not running" }
 $h = $p.MainWindowHandle
 $r = New-Object Shot+R; [Shot]::GetWindowRect($h, [ref]$r) | Out-Null
