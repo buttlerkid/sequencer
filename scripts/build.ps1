@@ -1,5 +1,5 @@
-# Configure + build DY Sequencer with MSVC via Ninja (no vswhere dependency).
-#   .\scripts\build.ps1            -> Release build of VST3, Standalone and engine tests
+# Configure + build the DY plugin suite with MSVC via Ninja (no vswhere dependency).
+#   .\scripts\build.ps1            -> Release build of every module (VST3 + Standalone) and engine tests
 #   .\scripts\build.ps1 -Config Debug
 #   .\scripts\build.ps1 -TestsOnly -> engine tests only (no JUCE download)
 param(
@@ -22,6 +22,7 @@ $cmd = "call `"$vcvars`" >nul && " +
 cmd.exe /c $cmd
 if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
 
-if ($TestsOnly -or (Test-Path (Join-Path $build "engine_tests.exe"))) {
-    & (Join-Path $build "engine_tests.exe")
+$tests = Join-Path $build "Sequencer\engine_tests.exe"
+if (Test-Path $tests) {
+    & $tests
 }

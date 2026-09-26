@@ -1,18 +1,37 @@
-# Zip the built VST3 for sharing: dist\DY-Sequencer-<version>-win-x64.zip
-param([string] $Config = "Release")
+# Zip a built VST3 for sharing: dist\DY-<Module>-<version>-win-x64.zip
+#   .\scripts\package.ps1 -Module Sequencer | Nodal
+param([ValidateSet("Sequencer", "Nodal")] [string] $Module = "Sequencer", [string] $Config = "Release")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$src  = Join-Path $root "build\DYSequencer_artefacts\$Config\VST3\DY Sequencer.vst3"
+$product = @{ Sequencer = "DY Sequencer"; Nodal = "DY Nodal" }[$Module]
+$src  = Join-Path $root "build\$Module\DY${Module}_artefacts\$Config\VST3\$product.vst3"
 if (-not (Test-Path $src)) { throw "Build first: $src not found" }
 
-$version = (Select-String -Path (Join-Path $root "CMakeLists.txt") -Pattern 'project\(DYSequencer VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+$version = (Select-String -Path (Join-Path $root "$Module\CMakeLists.txt") -Pattern 'set\(DY_\w+_VERSION ([0-9.]+)\)').Matches[0].Groups[1].Value
 $dist  = Join-Path $root "dist"
-$stage = Join-Path $dist "DY-Sequencer-$version"
+$slug  = $product -replace " ", "-"
+$stage = Join-Path $dist "$slug-$version"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force $stage | Out-Null
 
-Copy-Item -Recurse $src (Join-Path $stage "DY Sequencer.vst3")
+Copy-Item -Recurse $src (Join-Path $stage "$product.vst3")
 Copy-Item (Join-Path $root "LICENSE") $stage
+$readme = if ($Module -eq "Nodal") {
+@"
+DY Nodal $version  (Windows x64, VST3 audio effect)
+===================================================
+
+INSTALL
+  1. Copy the folder  "DY Nodal.vst3"  into
+        C:\Program Files\Common Files\VST3\
+     (you will be asked for administrator permission)
+  2. Ableton Live: Options > Preferences > Plug-Ins
+        "Use VST3 Plug-In System Folders" = On, then click Rescan.
+  3. Browser > Plug-Ins > VST3 > dy > DY Nodal  ->  drag onto any audio or instrument track.
+
+Source & updates: https://github.com/buttlerkid/sequencer
+"@
+} else {
 @"
 DY Sequencer $version  (Windows x64, VST3)
 ==========================================
@@ -38,9 +57,11 @@ QUICK START
   Export MIDI (drag it)          .mid onto a track
 
 Source & updates: https://github.com/buttlerkid/sequencer
-"@ | Set-Content -Encoding UTF8 (Join-Path $stage "README.txt")
+"@
+}
+$readme | Set-Content -Encoding UTF8 (Join-Path $stage "README.txt")
 
-$zip = Join-Path $dist "DY-Sequencer-$version-win-x64.zip"
+$zip = Join-Path $dist "$slug-$version-win-x64.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip
 Remove-Item -Recurse -Force $stage
