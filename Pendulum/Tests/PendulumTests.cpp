@@ -130,6 +130,30 @@ int main()
         p.descending = true; e.setParams (p);
         CHECK (e.noteOf (0) == 63 && e.noteOf (6) == 48);
     }
+    std::puts ("Layers and pads");
+    {   // drum pads: one pad each from C1
+        PendulumParams p; p.count = 8; p.noteMode = 1;
+        PendulumEngine e; e.setParams (p);
+        for (int k = 0; k < 8; ++k) CHECK (e.noteOf (k) == 36 + k);
+    }
+    {   // layers: neighbouring groups, each in its own two-octave band, optionally on its own channel
+        PendulumParams p; p.count = 10; p.layers = 4; p.root = 36; p.scale = 0; p.step = 1; p.layerChannels = true; p.channel = 3;
+        PendulumEngine e; e.prepare (sr); e.setParams (p);
+        const int wantLayer[10] = { 0, 0, 0, 1, 1, 2, 2, 2, 3, 3 };
+        for (int k = 0; k < 10; ++k)
+        {
+            CHECK (e.layerOf (k) == wantLayer[k]);
+            CHECK (e.channelOf (k) == 3 + wantLayer[k]);
+            CHECK (e.noteOf (k) >= 36 + kLayerSpan * wantLayer[k] && e.noteOf (k) < 36 + kLayerSpan * (wantLayer[k] + 1));
+        }
+        CHECK (e.noteOf (0) == 36 && e.noteOf (3) == 60 && e.noteOf (4) == 61 && e.noteOf (5) == 84);
+        // the events carry the layer's channel
+        std::vector<NoteEvent> ev;
+        for (int b = 0; b < 400; ++b) e.process (b * 512 / 24000.0, 120.0, 512, ev);
+        bool ok = ! ev.empty();
+        for (auto& x : ev) if (x.on) ok &= x.channel == e.channelOf (x.pendulum);
+        CHECK (ok);
+    }
     {   // the pendulums really line up again: all at +1 at the cycle, spread out at half
         PendulumParams p; p.count = 15; p.swings = 30; p.cycleBeats = 60;
         PendulumEngine e; e.setParams (p);

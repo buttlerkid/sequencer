@@ -69,7 +69,7 @@ public:
     ~PendulumEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
-    static constexpr int kW = 1100, kH = 690;
+    static constexpr int kW = 1100, kH = 752;
 
 private:
     void timerCallback() override;
@@ -79,8 +79,8 @@ private:
     WaveView wave;
     CycleBar cycle;
     Knob count, swings, root, step, length, velocity, accent, level;
-    Combo cycleBars, trigger, quantize, scale, channel, run;
-    Toggle descending, preview;
+    Combo cycleBars, trigger, quantize, scale, channel, run, noteMode, layers;
+    Toggle descending, preview, layerChannels;
     juce::Rectangle<int> panels[4];
     double shownPpq = 0.0;
     double lastUpdate = 0.0, lastTelemetryPpq = -1.0;

@@ -10,7 +10,8 @@ namespace PID
     inline const juce::String count = "count", cycleBars = "cycleBars", swings = "swings", trigger = "trigger",
         quantize = "quantize", root = "root", scale = "scale", step = "step", descending = "descending",
         length = "length", velocity = "velocity", accent = "accent", channel = "channel",
-        preview = "preview", previewLevel = "previewLevel", run = "run";
+        preview = "preview", previewLevel = "previewLevel", run = "run",
+        noteMode = "noteMode", layers = "layers", layerChannels = "layerChannels";
 }
 
 // A small polyphonic bell so the plugin is audible on its own (turn it off to play
@@ -73,7 +74,7 @@ private:
     std::vector<NoteEvent> events;
     double freePpq = 0.0, lastPpq = -1.0;
     bool wasRunning = false;
-    std::array<std::atomic<float>*, 16> raw {};
+    std::array<std::atomic<float>*, 19> raw {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PendulumProcessor)
 };

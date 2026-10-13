@@ -58,7 +58,15 @@ struct PendulumParams
     float  velocity = 0.8f;          // 0..1
     float  accent = 0.5f;            // 0..1: how much being in phase with the others adds
     int    channel = 1;              // 1..16
+    // ---- layers (v0.2): drive several tracks / pads from one wave
+    int    noteMode = 0;             // 0 scale notes, 1 drum pads (pendulum k plays C1 + k)
+    int    layers = 1;               // 1..4 groups of neighbouring pendulums
+    bool   layerChannels = false;    // each layer on its own MIDI channel (channel, channel + 1, ...)
 };
+
+// Layer L of the scale notes starts this many semitones above the root, so a
+// receiving track can pick its layer with Live's Pitch device (Lowest / Range).
+constexpr int kLayerSpan = 24;
 
 struct NoteEvent
 {
@@ -93,6 +101,8 @@ public:
     double position (int k, double ppq) const;               // -1..1, +1 = released side
     double coherence (double ppq) const;                     // 0..1: 1 = all in one line
     int    noteOf (int k) const;
+    int    layerOf (int k) const;
+    int    channelOf (int k) const;
     double lastHit (int k) const { return hits[static_cast<size_t> (clampIndex (k))]; }
     // when pendulum k last made (or would have made) a note, at or before ppq
     double lastEventBefore (int k, double ppq) const;

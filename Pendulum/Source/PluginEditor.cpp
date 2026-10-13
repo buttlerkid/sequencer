@@ -85,7 +85,8 @@ void WaveView::paint (juce::Graphics& g)
     {
         const float y = area.getY() + (k + 0.5f) * rowH;
         const float t = n > 1 ? static_cast<float> (k) / static_cast<float> (n - 1) : 0.0f;
-        const auto col = Colours::brass.interpolatedWith (Colours::teal, t);
+        static const juce::Colour layerCols[4] = { Colours::brass, Colours::teal, Colours::lilac, juce::Colour (0xffe58f8f) };
+        const auto col = e.getParams().layers > 1 ? layerCols[e.layerOf (k)] : Colours::brass.interpolatedWith (Colours::teal, t);
         g.setColour (Colours::line.withAlpha (0.25f));
         g.drawHorizontalLine (juce::roundToInt (y), cx - amp, cx + amp);
 
@@ -112,7 +113,9 @@ void WaveView::paint (juce::Graphics& g)
 
         g.setColour (Colours::dim);
         g.setFont (monoFont (10.0f));
-        g.drawText (juce::MidiMessage::getMidiNoteName (e.noteOf (k), true, true, 3), juce::Rectangle<float> (r.getRight() - 52.0f, y - 7.0f, 44.0f, 14.0f),
+        juce::String label = juce::MidiMessage::getMidiNoteName (e.noteOf (k), true, true, 3);
+        if (e.getParams().layerChannels) label << " ch" << e.channelOf (k);
+        g.drawText (label, juce::Rectangle<float> (r.getRight() - 58.0f, y - 7.0f, 50.0f, 14.0f),
                     juce::Justification::centredRight);
         g.drawText (juce::String (static_cast<int> (e.swingsOf (k))), juce::Rectangle<float> (r.getX() + 8.0f, y - 7.0f, 40.0f, 14.0f),
                     juce::Justification::centredLeft);
@@ -158,15 +161,22 @@ PendulumEditor::PendulumEditor (PendulumProcessor& p)
       accent (p.apvts, PID::accent, "Phase accent"), level (p.apvts, PID::previewLevel, "Level"),
       cycleBars (p.apvts, PID::cycleBars, "Cycle"), trigger (p.apvts, PID::trigger, "Notes on"), quantize (p.apvts, PID::quantize, "Quantize"),
       scale (p.apvts, PID::scale, "Scale"), channel (p.apvts, PID::channel, "MIDI channel"), run (p.apvts, PID::run, "Run"),
-      descending (p.apvts, PID::descending, "Long = high"), preview (p.apvts, PID::preview, "Preview sound")
+      noteMode (p.apvts, PID::noteMode, "Notes"), layers (p.apvts, PID::layers, "Layers"),
+      descending (p.apvts, PID::descending, "Long = high"), preview (p.apvts, PID::preview, "Preview sound"),
+      layerChannels (p.apvts, PID::layerChannels, "Layer = channel")
 {
     setLookAndFeel (&lnf);
     addAndMakeVisible (content);
     for (auto* c : std::initializer_list<juce::Component*> { &wave, &cycle, &count, &swings, &root, &step, &length, &velocity, &accent, &level,
-                                                              &cycleBars, &trigger, &quantize, &scale, &channel, &run, &descending, &preview })
+                                                              &cycleBars, &trigger, &quantize, &scale, &channel, &run, &descending, &preview,
+                                                              &noteMode, &layers, &layerChannels })
         content.addAndMakeVisible (c);
     swings.slider.setTooltip ("Full swings the longest pendulum makes in one cycle; each next one makes one more");
     accent.slider.setTooltip ("Notes get louder the more the pendulums are in phase: loudest when they line up");
+    layers.box.setTooltip ("Split the pendulums into groups, each two octaves higher than the last: on each receiving track, "
+                           "Live's Pitch device (Lowest / Range, Block) picks which group that track plays");
+    noteMode.box.setTooltip ("Drum pads: pendulum 1 plays C1, the next C#1 and so on, one Drum Rack pad each");
+    layerChannels.setTooltip ("Each layer also on its own MIDI channel, for multitimbral instruments and hardware");
     preview.setTooltip ("A built-in bell so you hear it straight away. Turn off to play another instrument from the MIDI output");
     setResizable (true, true);
     setResizeLimits (kW / 2, kH / 2, kW * 2, kH * 2);
@@ -225,7 +235,7 @@ void PendulumEditor::resized()
 
     const int x0 = wave.getRight() + pad, w = kW - x0 - pad;
     int y = top;
-    const int heights[4] = { 128, 176, 128, 168 };
+    const int heights[4] = { 128, 176, 128, 220 };
     for (int i = 0; i < 4; ++i) { panels[i] = { x0, y, w, heights[i] }; y += heights[i] + 10; }
     auto inner = [&] (int i) { auto r = panels[i].reduced (10, 8); r.removeFromTop (20); return r; };
     {
@@ -243,7 +253,10 @@ void PendulumEditor::resized()
         step.setBounds (row.removeFromLeft (kw));
         descending.setBounds (row.withSizeKeepingCentre (row.getWidth() - 8, 26));
         r.removeFromTop (6);
-        scale.setBounds (r.removeFromTop (40));
+        auto row2 = r.removeFromTop (40);
+        noteMode.setBounds (row2.removeFromRight (110));
+        row2.removeFromRight (8);
+        scale.setBounds (row2);
     }
     {
         auto r = inner (2);
@@ -261,9 +274,14 @@ void PendulumEditor::resized()
         quantize.setBounds (row);
         r.removeFromTop (6);
         auto row2 = r.removeFromTop (40);
-        channel.setBounds (row2.removeFromLeft (cw));
+        layers.setBounds (row2.removeFromLeft (cw));
         row2.removeFromLeft (8);
-        run.setBounds (row2);
+        channel.setBounds (row2);
+        r.removeFromTop (6);
+        auto rowL = r.removeFromTop (40);
+        run.setBounds (rowL.removeFromLeft (cw));
+        rowL.removeFromLeft (8);
+        layerChannels.setBounds (rowL.withTrimmedTop (14));
         r.removeFromTop (8);
         auto row3 = r.removeFromTop (26);
         preview.setBounds (row3.removeFromLeft (cw));

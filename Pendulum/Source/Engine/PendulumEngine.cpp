@@ -22,6 +22,8 @@ void PendulumEngine::setParams (const PendulumParams& p)
     params.step       = std::clamp (params.step, 0, 12);
     params.noteBeats  = std::clamp (params.noteBeats, 1.0 / 64.0, 16.0);
     params.channel    = std::clamp (params.channel, 1, 16);
+    params.noteMode   = std::clamp (params.noteMode, 0, 1);
+    params.layers     = std::clamp (params.layers, 1, std::min (4, params.count));
 }
 
 double PendulumEngine::position (int k, double ppq) const
@@ -59,13 +61,29 @@ double PendulumEngine::lastEventBefore (int k, double ppq) const
     return -1e18;
 }
 
+int PendulumEngine::layerOf (int k) const
+{
+    return std::clamp (k * params.layers / std::max (1, params.count), 0, params.layers - 1);
+}
+
+int PendulumEngine::channelOf (int k) const
+{
+    return std::clamp (params.channel + (params.layerChannels ? layerOf (k) : 0), 1, 16);
+}
+
 int PendulumEngine::noteOf (int k) const
 {
-    const auto& sc = kScales[params.scale];
     const int idx = params.descending ? params.count - 1 - k : k;
-    const int degree = idx * params.step;
+    if (params.noteMode == 1) return std::clamp (36 + idx, 0, 127);          // one Drum Rack pad each
+    const auto& sc = kScales[params.scale];
+    // with layers, each group of pendulums climbs the scale from its own band
+    const int layer = layerOf (k);
+    auto firstOf = [&] (int L) { return (L * params.count + params.layers - 1) / params.layers; };   // first pendulum of layer L
+    const int inLayer = params.layers > 1 ? (params.descending ? firstOf (layer + 1) - 1 - k : k - firstOf (layer)) : idx;
+    const int degree = inLayer * params.step;
+    const int band = params.layers > 1 ? layer * kLayerSpan : 0;
     const int oct = degree / sc.size, d = degree % sc.size;
-    return std::clamp (params.root + 12 * oct + sc.steps[d], 0, 127);
+    return std::clamp (params.root + band + 12 * oct + sc.steps[d], 0, 127);
 }
 
 void PendulumEngine::allNotesOff (int sample, std::vector<NoteEvent>& out)
@@ -137,19 +155,19 @@ void PendulumEngine::process (double p0, double bpm, int n, std::vector<NoteEven
     for (const auto& h : found)
     {
         releaseUntil (p0, p1, h.t + 1e-12, n, out);       // notes that ended up to here, first
-        const int note = noteOf (h.k), s = toSample (h.t);
+        const int note = noteOf (h.k), s = toSample (h.t), ch = channelOf (h.k);
         // a note still sounding is released first
         for (auto it = sounding.begin(); it != sounding.end(); ++it)
-            if (it->note == note && it->channel == params.channel)
+            if (it->note == note && it->channel == ch)
             {
-                out.push_back ({ s, note, 0.0f, false, h.k, params.channel });
+                out.push_back ({ s, note, 0.0f, false, h.k, ch });
                 sounding.erase (it);
                 break;
             }
         const float coh = static_cast<float> (coherence (h.t));
         const float vel = std::clamp (params.velocity * (1.0f - params.accent * (1.0f - coh)), 1.0f / 127.0f, 1.0f);
-        out.push_back ({ s, note, vel, true, h.k, params.channel });
-        sounding.push_back ({ note, params.channel, h.t + params.noteBeats });
+        out.push_back ({ s, note, vel, true, h.k, ch });
+        sounding.push_back ({ note, ch, h.t + params.noteBeats });
         hits[static_cast<size_t> (h.k)] = h.t;
     }
     // notes shorter than the rest of the block end inside it

@@ -1,4 +1,4 @@
-set(DY_PENDULUM_VERSION 0.1.0)
+set(DY_PENDULUM_VERSION 0.2.0)
 
 if(DY_BUILD_TESTS)
     add_executable(pendulum_tests Tests/PendulumTests.cpp Source/Engine/PendulumEngine.cpp)

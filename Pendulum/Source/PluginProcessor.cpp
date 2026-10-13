@@ -71,12 +71,15 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
     l.add (std::make_unique<AudioParameterBool>   (id (PID::preview), "Preview Sound", true));
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::previewLevel), "Preview Level", NormalisableRange<float> (0.0f, 1.0f), 0.6f, pct));
     l.add (std::make_unique<AudioParameterChoice> (id (PID::run), "Run", StringArray { "With transport", "Always" }, 0));
+    l.add (std::make_unique<AudioParameterChoice> (id (PID::noteMode), "Notes", StringArray { "Scale", "Drum pads" }, 0));
+    l.add (std::make_unique<AudioParameterChoice> (id (PID::layers), "Layers", StringArray { "1 layer", "2 layers", "3 layers", "4 layers" }, 0));
+    l.add (std::make_unique<AudioParameterBool>   (id (PID::layerChannels), "Layer = Channel", false));
     return l;
 }
 
-static const juce::String* kIds[16] = { &PID::count, &PID::cycleBars, &PID::swings, &PID::trigger, &PID::quantize, &PID::root, &PID::scale,
+static const juce::String* kIds[19] = { &PID::count, &PID::cycleBars, &PID::swings, &PID::trigger, &PID::quantize, &PID::root, &PID::scale,
                                         &PID::step, &PID::descending, &PID::length, &PID::velocity, &PID::accent, &PID::channel,
-                                        &PID::preview, &PID::previewLevel, &PID::run };
+                                        &PID::preview, &PID::previewLevel, &PID::run, &PID::noteMode, &PID::layers, &PID::layerChannels };
 
 PendulumProcessor::PendulumProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
@@ -95,6 +98,7 @@ PendulumParams PendulumProcessor::readParams() const
     p.cycleBeats = 4.0 * (1 << i (1));
     p.swings = i (2); p.trigger = i (3); p.quantize = i (4); p.root = i (5); p.scale = i (6); p.step = i (7);
     p.descending = f (8) > 0.5f; p.noteBeats = f (9); p.velocity = f (10); p.accent = f (11); p.channel = i (12) + 1;
+    p.noteMode = i (16); p.layers = i (17) + 1; p.layerChannels = f (18) > 0.5f;
     return p;
 }
 
@@ -122,7 +126,8 @@ void PendulumProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     // a change in the settings that moves notes releases what sounds, so nothing hangs
     const auto before = engine.getParams();
     const bool remap = before.count != p.count || before.root != p.root || before.scale != p.scale || before.step != p.step
-                    || before.descending != p.descending || before.channel != p.channel;
+                    || before.descending != p.descending || before.channel != p.channel
+                    || before.noteMode != p.noteMode || before.layers != p.layers || before.layerChannels != p.layerChannels;
     events.clear();
     if (remap) engine.allNotesOff (0, events);
     engine.setParams (p);
