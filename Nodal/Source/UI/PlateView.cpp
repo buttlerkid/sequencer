@@ -682,6 +682,9 @@ PlateView::PlateView (NodalProcessor& p, PlateViewState& s) : proc (p), state (s
 
 void PlateView::timerCallback()
 {
+    // Nothing in, nothing ringing: after two seconds the plate says how to get sound into it.
+    const bool silent = proc.telemetry.peakIn.load() < 1e-4f && proc.telemetry.peakOut.load() < 1e-4f;
+    quietTicks = silent ? std::min (quietTicks + 1, 1000) : 0;
     // Repaint the overlay only when what it shows has changed.
     juce::String key;
     key << proc.telemetry.body.load() << '|' << state.shownMode.load() << '|' << state.shownExtra.load() << '|' << (int) state.shownZonal.load() << '|' << juce::roundToInt (proc.telemetry.f0.load() * 10.0f)
@@ -689,6 +692,7 @@ void PlateView::timerCallback()
         << '|' << proc.params.spread->load() << '|' << state.yaw.load() << '|' << state.pitch.load()
         << '|' << juce::roundToInt (modulatedStrike (0) * 400.0f) << '|' << juce::roundToInt (modulatedStrike (1) * 400.0f)
         << '|' << juce::roundToInt (proc.telemetry.mod[ModSpread].load() * 400.0f) << '|' << juce::roundToInt (proc.telemetry.note.load() * 10.0f);
+    key << '|' << (quietTicks > 60 ? 1 : 0);
     if (key != lastHud) { lastHud = key; repaint(); }
 }
 
@@ -779,6 +783,20 @@ void PlateView::paint (juce::Graphics& g)
                     + juce::String::fromUTF8 ("\xE2\x89\x88 ") + juce::String (juce::roundToInt (cm)) + " cm",
                 bottom, juce::Justification::centredLeft);
     g.drawText (is3D (bd) ? "drag to turn  click to strike there" : "click to strike  drag the dot to move it", bottom, juce::Justification::centredRight);
+
+    if (quietTicks > 60)
+    {
+        const bool instrument = proc.params.playMode->load() > 1.5f;
+        const juce::String hint = instrument
+            ? "Play a MIDI note (arm the track), or click the keys under the plate"
+            : "No sound coming in. Put DY Nodal after a synth, drums or a playing clip, or click the plate.";
+        auto box = getLocalBounds().reduced (30, 0).removeFromBottom (90).withTrimmedBottom (34).toFloat();
+        g.setColour (Colours::page.withAlpha (0.82f));
+        g.fillRoundedRectangle (box, 6.0f);
+        g.setColour (Colours::brass.withAlpha (0.9f));
+        g.setFont (bodyFont (12.5f));
+        g.drawFittedText (hint, box.reduced (10, 4).toNearestInt(), juce::Justification::centred, 2);
+    }
 
     // markers
     bool vis = false;

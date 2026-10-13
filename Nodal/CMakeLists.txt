@@ -1,4 +1,4 @@
-set(DY_NODAL_VERSION 0.4.0)
+set(DY_NODAL_VERSION 0.5.0)
 
 set(NODAL_ENGINE_SOURCES
     Source/Engine/Bodies.cpp

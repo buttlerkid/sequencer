@@ -97,6 +97,7 @@ private:
     juce::Point<float> downPos;
     float downYaw = 0, downPitch = 0;
     juce::String lastHud;
+    int quietTicks = 0;           // how long nothing has come in or rung (timer ticks)
 };
 
 } // namespace dy::nodal

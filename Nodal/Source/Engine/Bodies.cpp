@@ -1,4 +1,5 @@
 #include "Bodies.h"
+#include "PlateModes.inc"
 #include <array>
 #include <cstdio>
 
@@ -24,66 +25,6 @@ double besselJ (int n, double x)
         s += std::cos (n * t - x * std::sin (t));
     }
     return s / N;
-}
-
-static double besselJPrime (int n, double x)
-{
-    return n == 0 ? -besselJ (1, x) : 0.5 * (besselJ (n - 1, x) - besselJ (n + 1, x));
-}
-
-// m-th positive zero of J'_n: the free-edge (Neumann) circular modes. Their nodal
-// circles sit inside the plate and the rim swings freely, like Chladni's plates.
-static double besselPrimeZero (int n, int m)
-{
-    // J'_n is ~x^(n-1) near 0, far below rounding noise for high n, so start where it is
-    // well defined: every zero of J'_n (n >= 1) lies above n; J'_0's first real zero is 3.83.
-    double x = n == 0 ? 0.5 : n * 0.95, prev = besselJPrime (n, x);
-    int found = 0;
-    for (double step = 0.02; x < 80.0; )
-    {
-        const double nx = x + step, v = besselJPrime (n, nx);
-        if ((prev > 0.0) != (v > 0.0))
-        {
-            if (++found == m)
-            {
-                double lo = x, hi = nx, flo = prev;
-                for (int i = 0; i < 60; ++i)
-                {
-                    const double mid = 0.5 * (lo + hi), fm = besselJPrime (n, mid);
-                    if ((fm > 0.0) == (flo > 0.0)) { lo = mid; flo = fm; } else hi = mid;
-                }
-                return 0.5 * (lo + hi);
-            }
-        }
-        x = nx; prev = v;
-    }
-    return 0.0;
-}
-
-[[maybe_unused]] static double besselZero (int n, int m)
-{
-    // Scan for the m-th sign change above x = n (all zeros of J_n lie above n), then bisect.
-    double x = n + 0.05, prev = besselJ (n, x);
-    int found = 0;
-    for (double step = 0.05; x < 80.0; )
-    {
-        const double nx = x + step, v = besselJ (n, nx);
-        if ((prev > 0.0) != (v > 0.0))
-        {
-            if (++found == m)
-            {
-                double lo = x, hi = nx, flo = prev;
-                for (int i = 0; i < 60; ++i)
-                {
-                    const double mid = 0.5 * (lo + hi), fm = besselJ (n, mid);
-                    if ((fm > 0.0) == (flo > 0.0)) { lo = mid; flo = fm; } else hi = mid;
-                }
-                return 0.5 * (lo + hi);
-            }
-        }
-        x = nx; prev = v;
-    }
-    return 0.0;
 }
 
 // Associated Legendre P_l^m(x), m >= 0 (Condon-Shortley phase omitted; only shapes matter).
@@ -295,54 +236,57 @@ void pickupPoints (Body b, Vec3 strike, float spread, Vec3& left, Vec3& right)
     right = place (a - half);
 }
 
-// ------------------------------------------------------------------ mode shapes (un-normalised)
-static double hexSum (int k, float x, float y)
+
+bool isPlate (Body b) { return b == Body::Square || b == Body::Circle || b == Body::Hexagon || b == Body::Violin; }
+
+static const plate::Table& plateTable (Body b)
 {
-    double s = 0.0;
-    for (int i = 0; i < 3; ++i)
+    switch (b)
     {
-        const double t = i * kPi / 3.0;
-        s += std::cos (k * kPi * (x * std::cos (t) + y * std::sin (t)));
+        case Body::Circle:  return plate::circle;
+        case Body::Hexagon: return plate::hexagon;
+        case Body::Violin:  return plate::violin;
+        default:            return plate::square;
     }
-    return s;
+}
+
+// sum_ij c_ij p_i(x / sx) p_j(y / sy) with normalised Legendre polynomials
+static double plateShape (Body b, int index, float x, float y)
+{
+    const auto& t = plateTable (b);
+    constexpr int N = plate::kBasis;
+    double px[N], py[N];
+    const double u = x / t.sx, v = y / t.sy;
+    px[0] = py[0] = 1.0;
+    px[1] = u; py[1] = v;
+    for (int n = 1; n + 1 < N; ++n)
+    {
+        px[n + 1] = ((2 * n + 1) * u * px[n] - n * px[n - 1]) / (n + 1);
+        py[n + 1] = ((2 * n + 1) * v * py[n] - n * py[n - 1]) / (n + 1);
+    }
+    for (int n = 0; n < N; ++n)
+    {
+        const double s = std::sqrt ((2.0 * n + 1.0) * 0.5);
+        px[n] *= s; py[n] *= s;
+    }
+    const float* c = t.coeffs + static_cast<size_t> (index) * N * N;
+    double sum = 0.0;
+    for (int i = 0; i < N; ++i)
+    {
+        double row = 0.0;
+        for (int j = 0; j < N; ++j) row += c[i * N + j] * py[j];
+        sum += px[i] * row;
+    }
+    return sum;
 }
 
 static double rawShape (Body b, const Mode& m, Vec3 p)
 {
+    if (m.plate >= 0)
+        return insidePlate (b, p.x, p.y) ? plateShape (b, m.plate, p.x, p.y) : 0.0;
+
     switch (b)
     {
-        case Body::Square:
-        {
-            if (! insidePlate (b, p.x, p.y)) return 0.0;
-            const double u = (p.x + 1.0) * 0.5, v = (p.y + 1.0) * 0.5;
-            const double sgn = m.variant == 0 ? 1.0 : -1.0;
-            return std::cos (m.a * kPi * u) * std::cos (m.b * kPi * v)
-                 + sgn * std::cos (m.b * kPi * u) * std::cos (m.a * kPi * v);
-        }
-        case Body::Circle:
-        {
-            const double r = std::sqrt (static_cast<double> (p.x) * p.x + static_cast<double> (p.y) * p.y);
-            if (r > 1.0 || m.radial.empty()) return 0.0;
-            const double fi = r * (m.radial.size() - 1);
-            const size_t i0 = static_cast<size_t> (fi);
-            const size_t i1 = std::min (i0 + 1, m.radial.size() - 1);
-            const double f = fi - i0;
-            const double rad = m.radial[i0] * (1.0 - f) + m.radial[i1] * f;
-            const double th = std::atan2 (static_cast<double> (p.y), static_cast<double> (p.x));
-            return rad * (m.variant == 0 ? std::cos (m.a * th) : std::sin (m.a * th));
-        }
-        case Body::Hexagon:
-        {
-            if (! insidePlate (b, p.x, p.y)) return 0.0;
-            const double sgn = m.variant == 0 ? 1.0 : -1.0;
-            return hexSum (m.a, p.x, p.y) + sgn * hexSum (m.b, p.x, p.y);
-        }
-        case Body::Violin:
-        {
-            if (! insidePlate (b, p.x, p.y)) return 0.0;
-            const double u = (p.x + kViolinHalfWidth) / (2.0 * kViolinHalfWidth), v = (p.y + 1.0) * 0.5;
-            return std::cos (m.a * kPi * u) * std::cos (m.b * kPi * v);
-        }
         case Body::Sphere:
         case Body::Icosahedron:
             return realSphericalHarmonic (m.a, m.b, p.normalised());
@@ -372,50 +316,28 @@ static std::vector<Mode> enumerate (Body b)
         v.push_back (m);
     };
 
+    if (isPlate (b))
+    {
+        const auto& t = plateTable (b);
+        for (int k = 0; k < plate::kCount; ++k)
+        {
+            const auto& info = t.modes[k];
+            Mode m;
+            m.plate = k;
+            m.omega = info.omega;
+            m.variant = info.variant;
+            m.label = info.label;
+            m.a = info.n >= 0 ? info.n : info.group;
+            m.b = info.n >= 0 ? info.rings : 0;
+            // a perfect plate's degenerate pair rings at one pitch; real plates split it a little
+            m.ratio = info.omega * (info.variant ? 1.003 : 1.0);
+            v.push_back (m);
+        }
+    }
+    else
     switch (b)
     {
-        case Body::Square:
-            // Chladni's classic free-plate approximation: plate bending, f ~ k^2.
-            // The +/- pair is degenerate in theory; real plates split it slightly.
-            for (int a = 0; a <= 9; ++a)
-                for (int c = a; c <= 9; ++c)
-                {
-                    if (a == 0 && c == 0) continue;
-                    const double k = a * a + c * c;
-                    add (a, c, 0, 0, k * 0.985);
-                    if (a != c) add (a, c, 0, 1, k * 1.015);
-                }
-            break;
-        case Body::Circle:
-            for (int n = 0; n <= 10; ++n)
-                for (int m = 1; m <= 5; ++m)
-                {
-                    if (n == 1 && m == 1) continue;        // J1 (1.84 r): on a free plate that is rigid tilting, not a mode
-                    const double j = besselPrimeZero (n, m);
-                    add (n, m, 0, 0, j * j);
-                    if (n > 0) add (n, m, 0, 1, j * j * 1.004);
-                    v.back().besselZero = j;
-                    if (n > 0) v[v.size() - 2].besselZero = j;
-                }
-            break;
-        case Body::Hexagon:
-            for (int a = 1; a <= 10; ++a)
-                for (int c = a + 1; c <= 11; ++c)
-                {
-                    const double k = a * a + a * c + c * c;
-                    add (a, c, 0, 0, k * 0.99);
-                    add (a, c, 0, 1, k * 1.01);
-                }
-            break;
-        case Body::Violin:
-            for (int a = 0; a <= 7; ++a)
-                for (int c = 0; c <= 10; ++c)
-                {
-                    if (a == 0 && c == 0) continue;
-                    const double kx = a / (2.0 * kViolinHalfWidth), ky = c / 2.0;
-                    add (a, c, 0, 0, kx * kx + ky * ky);
-                }
-            break;
+        // the plates come from PlateModes.inc above
         case Body::Sphere:
         case Body::Icosahedron:
         {
@@ -457,12 +379,7 @@ static void finalise (Body b, std::vector<Mode>& modes)
 {
     for (auto& m : modes)
     {
-        if (b == Body::Circle)
-        {
-            m.radial.resize (513);
-            for (size_t i = 0; i < m.radial.size(); ++i)
-                m.radial[i] = static_cast<float> (besselJ (m.a, m.besselZero * static_cast<double> (i) / 512.0));
-        }
+        if (m.plate >= 0) { m.norm = 1.0f; continue; }   // the generator already normalised the plates
 
         // Normalise so the shape peaks at +-1 over the body.
         double mx = 1e-12;
@@ -509,6 +426,7 @@ const ModeSet& modeSet (Body b)
 
 std::string modeLabel (Body b, const Mode& m)
 {
+    if (m.label != nullptr) return m.label;
     const char* dot = "\xC2\xB7";
     char buf[64];
     switch (b)

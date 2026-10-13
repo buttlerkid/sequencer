@@ -14,19 +14,26 @@ inline bool is3D (Body b) { return static_cast<int> (b) >= static_cast<int> (Bod
 const char* bodyName (Body b);
 
 // One vibration mode. The meaning of a/b/c depends on the body:
-//   Square, Hexagon  (a, b) wave numbers, variant = sign of the mirrored term
-//   Violin           (a, b) wave numbers across / along the body
-//   Circle           a = nodal diameters, b = nodal circles, variant 0 cos / 1 sin
+//   Square, Violin   a = the mode's group (a degenerate pair shares it)
+//   Circle, Hexagon  a = nodal diameters, b = nodal circles
 //   Sphere, Icosa    a = degree l, b = order m (signed)
 //   Cube             (a, b, c) wave numbers along x, y, z
+// variant 1 marks the second member of a degenerate pair.
+//
+// The plates (square, circle, hexagon, violin) are real free-edge Kirchhoff plates:
+// their modes were solved offline by tools/plate_modes.py (Rayleigh-Ritz, checked
+// against the exact circle solution and Leissa's square plate) into PlateModes.inc.
 struct Mode
 {
     int a = 0, b = 0, c = 0, variant = 0;
     double ratio = 1.0;            // frequency relative to the lowest mode
     float  norm  = 1.0f;           // 1 / max |shape|, so shapes peak at +-1
-    double besselZero = 0.0;       // circle only
-    std::vector<float> radial;     // circle only: J_a (besselZero * r) sampled over r in [0, 1]
+    int    plate = -1;             // plates: index into the generated table
+    double omega = 0.0;            // plates: omega * sqrt(rho h / D) in plate units
+    const char* label = nullptr;   // plates: "2 diam · 1 ring", "N 1 · M 2 +", ...
 };
+
+bool isPlate (Body b);             // one of the four 2D plates
 
 struct ModeSet
 {

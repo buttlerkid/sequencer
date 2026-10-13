@@ -22,11 +22,17 @@ two **pickups** (L / R) listen elsewhere on it, so where you strike and listen
 changes the tone, exactly like on a real plate: strike on a nodal line and that
 mode stays silent.
 
-**Bodies.** Square, circle, hexagon and violin plates. Square, hexagon and violin
-use Chladni's free-plate approximation; the circle uses the free-edge Bessel modes
-(zeros of J′ₙ), so its nodal circles sit inside the plate. Its lowest figure is
-Chladni's two-diameter cross: the one-diameter "mode" of a free disc is the plate
-tilting, not vibrating, so it is left out.
+**Bodies.** Square, circle, hexagon and violin plates, and they are real plates:
+each one's modes are the actual solutions of the Kirchhoff plate equation with
+all edges free (the way Chladni held his plates), Poisson ratio 0.3, so the
+frequency ratios are the real, inharmonic ones and the sand figures are the real
+figures. They were solved offline (Rayleigh-Ritz, `tools/plate_modes.py`) and
+checked against the exact circle solution (J and I Bessel functions with the
+free-edge moment and shear conditions) and Leissa's published square plate values;
+both agree to about 0.001 %. A degenerate pair (two shapes at one pitch, like the
+circle's crosses) is split by 0.3 % as on any real plate, which makes them beat.
+Every mode has the same modal mass, so, as on a real plate, striking near a
+corner or edge (where free plates swing hardest) rings harder than the middle.
 
 **Shells.** A sphere, a cube and an icosahedron, drawn in 3D and slowly turning.
 The sphere and icosahedron ring in spherical harmonics (degree ℓ from 2: ℓ = 1
@@ -132,6 +138,13 @@ Put **DY Nodal Instrument** on a MIDI track and play; the Mix knob starts at
 
 ## Engine notes
 
+- Plate modes: `tools/plate_modes.py` builds the stiffness and mass matrices of a
+  tensor Legendre basis (degree 22 per axis) over each plate shape, solves the
+  generalised eigenproblem, drops the three rigid motions, checks the square and
+  circle against the references (the run fails if either is off by more than
+  0.5 %) and writes `Source/Engine/PlateModes.inc`. The tests check the tables
+  again: square against Leissa, circle against the exact roots, mode counts of
+  nodal diameters and rings, symmetry, equal modal mass.
 - Each mode is a complex one-pole resonator `z = r·e^{jω}`: unconditionally stable,
   phase-continuous when the frequency glides, and `|state|` is the mode's
   amplitude, which is what the display reads.

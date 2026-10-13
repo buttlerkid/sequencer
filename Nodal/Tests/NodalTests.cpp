@@ -7,6 +7,7 @@
 #include "Engine/Modulation.h"
 #include "Engine/PitchTracker.h"
 #include <set>
+#include <string>
 
 #include <cstdio>
 #include <cmath>
@@ -62,7 +63,24 @@ static void testBodies()
         for (size_t i = 1; i < ms.size(); ++i) CHECK (ms[i].ratio >= ms[i - 1].ratio);
         CHECK (ms.back().ratio > 3.0);
 
-        // Normalised shapes peak at ~1 over the body and never exceed it by much.
+        // Plates: equal modal mass, RMS 0.5 over the plate. Shells: peak at ~1.
+        if (isPlate (body))
+        {
+            for (size_t i = 0; i < 12; ++i)
+            {
+                double sum = 0; int cnt = 0;
+                for (int iy = 0; iy < 120; ++iy)
+                    for (int ix = 0; ix < 120; ++ix)
+                    {
+                        const float x = -1 + 2 * (ix + 0.5f) / 120, y = -1 + 2 * (iy + 0.5f) / 120;
+                        if (! insidePlate (body, x, y)) continue;
+                        const double v = modeShape (body, ms[i], Vec3 (x, y, 0));
+                        sum += v * v; ++cnt;
+                    }
+                CHECK_NEAR (std::sqrt (sum / cnt), 0.5, 0.02);
+            }
+            continue;
+        }
         for (size_t i = 0; i < 12; ++i)
         {
             double mx = 0;
@@ -92,28 +110,53 @@ static void testBodies()
     CHECK (! insidePlate (Body::Violin, 0.64f, 0.03f));          // inside a C-bout cut
     CHECK (insidePlate (Body::Hexagon, 0.99f, 0.0f) && ! insidePlate (Body::Hexagon, 0.0f, 0.9f));
 
-    // circle (0, 1), free edge: one nodal circle inside the plate at 2.405 / 3.832 of the radius,
-    // and the rim swings (not a nodal line)
-    int seen = 0;
-    for (const auto& m : modeSet (Body::Circle).modes)
-        if (m.a == 0 && m.b == 1)
-        {
-            ++seen;
-            CHECK_NEAR (m.besselZero, 3.8317059702, 1e-6);
-            CHECK_NEAR (modeShape (Body::Circle, m, Vec3 (0.62763f, 0, 0)), 0.0f, 0.01f);
-            CHECK (std::abs (modeShape (Body::Circle, m, Vec3 (0.999f, 0, 0))) > 0.2f);
-        }
-    CHECK (seen == 1);
-    for (const auto& m : modeSet (Body::Circle).modes)
-    {
-        CHECK (! (m.a == 1 && m.b == 1));                                            // rigid tilt is not a mode
-        if (m.a == 1 && m.b == 2) CHECK_NEAR (m.besselZero, 5.3314427735, 1e-6);    // 1 diameter + 1 ring
+    // ---- the plates are real free-edge Kirchhoff plates (nu = 0.3)
+    {   // square: Leissa's free square plate, omega a^2 sqrt(rho h / D); our side is 2, so x4
+        const double leissa[] = { 13.468, 19.596, 24.270, 34.801, 34.801, 61.093, 61.093, 63.686 };
+        const auto& sm = modeSet (Body::Square).modes;
+        for (int k = 0; k < 8; ++k) CHECK_NEAR (sm[static_cast<size_t> (k)].omega * 4.0 / leissa[k], 1.0, 0.002);
     }
-    {   // the lowest circle mode is Chladni's two-diameter cross, then the single ring
+    {   // circle: the exact solution J_n(kr) + C I_n(kr) with free-edge moment and shear (k^2 values)
+        struct Ref { double omega; int n, rings; };
+        const Ref exact[] = { { 5.358, 2, 0 }, { 9.003, 0, 1 }, { 12.439, 3, 0 }, { 20.475, 1, 1 }, { 21.835, 4, 0 },
+                              { 33.495, 5, 0 }, { 35.260, 2, 1 }, { 38.443, 0, 2 } };
         const auto& cm = modeSet (Body::Circle).modes;
-        CHECK (cm[0].a == 2 && cm[0].b == 1 && cm[1].a == 2 && cm[1].b == 1);
+        size_t k = 0;
+        for (const auto& r : exact)
+        {
+            while (k < cm.size() && cm[k].variant == 1) ++k;
+            CHECK_NEAR (cm[k].omega / r.omega, 1.0, 0.001);
+            CHECK (cm[k].a == r.n && cm[k].b == r.rings);
+            ++k;
+        }
+        // the lowest figure is Chladni's two-diameter cross (a degenerate pair), then the ring
+        CHECK (cm[0].a == 2 && cm[1].a == 2 && cm[1].variant == 1);
         CHECK (cm[2].a == 0 && cm[2].b == 1);
-        CHECK_NEAR (cm[0].ratio, 1.0, 1e-9);
+        CHECK (std::string (modeLabel (Body::Circle, cm[2])) == "0 diam \xC2\xB7 1 ring");
+        // the ring mode: one sign change along the radius, and the free rim swings
+        const Mode& ring = cm[2];
+        int changes = 0; float prev = modeShape (Body::Circle, ring, Vec3 (0, 0, 0));
+        for (int t = 1; t <= 100; ++t)
+        {
+            const float v = modeShape (Body::Circle, ring, Vec3 (0.99f * t / 100.0f, 0, 0));
+            if ((v < 0) != (prev < 0)) ++changes;
+            prev = v;
+        }
+        CHECK (changes == 1);
+        CHECK (std::abs (modeShape (Body::Circle, ring, Vec3 (0.99f, 0, 0))) > 0.2f);
+        // it is round: the same value all the way round
+        for (int a = 0; a < 12; ++a)
+            CHECK_NEAR (modeShape (Body::Circle, ring, Vec3 (0.5f * std::cos (a * 0.52f), 0.5f * std::sin (a * 0.52f), 0)),
+                        modeShape (Body::Circle, ring, Vec3 (0.5f, 0, 0)), 0.01f);
+    }
+    {   // square symmetry: every mode is even or odd under x -> -x and y -> -y
+        const auto& sm = modeSet (Body::Square).modes;
+        for (size_t k = 0; k < 16; ++k)
+        {
+            const float a = modeShape (Body::Square, sm[k], Vec3 (0.31f, 0.57f, 0)), bx = modeShape (Body::Square, sm[k], Vec3 (-0.31f, 0.57f, 0));
+            const float sw = modeShape (Body::Square, sm[k], Vec3 (0.57f, 0.31f, 0));
+            CHECK (std::abs (std::abs (a) - std::abs (bx)) < 0.02f || std::abs (std::abs (a) - std::abs (sw)) < 0.02f);
+        }
     }
 
     // picking a point on a turned 3D body finds the front surface there, and a strike
@@ -646,8 +689,14 @@ static void testInstrument()
             auto out = runMidi (e, S, { { 0, 0, 60, 1.0f }, { static_cast<int> (sr * 0.3), 1, 60, 0.0f } }, 512);
             tail[k] = rms (out, static_cast<size_t> (sr * 0.7), static_cast<size_t> (sr * 0.9)) / rms (out, static_cast<size_t> (sr * 0.1), static_cast<size_t> (sr * 0.3));
         }
+        // the same note with the key held throughout: key-up damping 0 must not change the ring
+        EngineParams p = base(); p.noteDamp = 0.0; p.decay = 2.5;
+        NodalEngine e; e.prepare (sr); e.setParams (p);
+        auto held = runMidi (e, S, { { 0, 0, 60, 1.0f } }, 512);
+        const double heldTail = rms (held, static_cast<size_t> (sr * 0.7), static_cast<size_t> (sr * 0.9)) / rms (held, static_cast<size_t> (sr * 0.1), static_cast<size_t> (sr * 0.3));
         CHECK (tail[0] < 0.01);
-        CHECK (tail[1] > 0.1);
+        CHECK_NEAR (tail[1] / heldTail, 1.0, 0.02);
+        CHECK (tail[1] > 0.03);
     }
     {   // polyphony, stealing and mono
         EngineParams p = base();
