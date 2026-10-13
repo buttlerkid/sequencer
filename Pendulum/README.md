@@ -43,7 +43,9 @@ in phase the pendulums are right now.
 Drag **DY Pendulum** onto a MIDI track and press play: the built-in bell plays.
 To drive your own instrument, turn **Preview sound** off, and on a second MIDI
 track set *MIDI From* to the DY Pendulum track, second box "DY Pendulum",
-*Monitor* In, and put the instrument there. ### Driving other tracks
+*Monitor* In, and put the instrument there.
+
+### Driving other tracks
 
 Every track that sets *MIDI From* to the DY Pendulum track (second box "DY
 Pendulum", Monitor In) receives the whole wave; Live cannot filter a track's MIDI
@@ -60,8 +62,7 @@ input by channel, so DY Pendulum splits the wave by notes instead:
 - **Layer = channel** also puts each layer on its own MIDI channel, for
   multitimbral instruments and hardware synths, which do filter by channel.
 
-Long cycles (16 to 64 bars) make
-slow-evolving patterns for ambient and minimal; short cycles with Quantize make
+Long cycles (16 to 64 bars) make slow-evolving patterns for ambient and minimal; short cycles with Quantize make
 tight, shifting poly-rhythms.
 
 ## Building
