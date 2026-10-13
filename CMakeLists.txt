@@ -3,7 +3,8 @@ project(DYSuite LANGUAGES C CXX)
 
 # DY plugin suite: every module lives in its own folder and shares one JUCE.
 #   Sequencer/  DY Sequencer - 16-track Euclidean MIDI sequencer (instrument, MIDI out)
-#   Nodal/      DY Nodal     - Chladni plate resonator (audio effect)
+#   Nodal/      DY Nodal     - Chladni plate resonator (audio effect + instrument)
+#   Pendulum/   DY Pendulum  - pendulum wave MIDI generator (instrument, MIDI out)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,3 +46,4 @@ endfunction()
 
 add_subdirectory(Sequencer)
 add_subdirectory(Nodal)
+add_subdirectory(Pendulum)

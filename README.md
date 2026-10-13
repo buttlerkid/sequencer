@@ -8,6 +8,7 @@ scripts.
 |---|---|---|
 | [Sequencer](Sequencer/README.md) | DY Sequencer: 16-track Euclidean, scale-aware MIDI step sequencer with patterns, chains, conditions and chord follow | v0.5.0 |
 | [Nodal](Nodal/README.md) | DY Nodal: Chladni plate resonator, as an effect and as an instrument. Up to 32 tuned modes of four real free-edge plates (solved and checked against published values) and three 3D shells, body size stepped through a scale, six materials, 8-voice MIDI playing with mallet / pluck / bow / breath exciters, sidechain, LFOs / input follower / pitch follow, and GPU sand that shows which modes are ringing | v0.5.0 |
+| [Pendulum](Pendulum/README.md) | DY Pendulum: a pendulum wave as a MIDI generator. Up to 24 pendulums drift into waves and line up again every cycle, each swing plays a scale note, song-position exact, with a built-in preview bell | v0.1.0 |
 
 ![DY Sequencer](docs/screenshot-v0.4-dark.png)
 
@@ -31,6 +32,7 @@ Outputs: `build\<Module>\DY<Module>_artefacts\Release\{VST3,Standalone}`.
 CMakeLists.txt      suite: fetches JUCE once, shared compile settings, adds each module
 Sequencer/          DY Sequencer (Source/, Tests/, README.md)
 Nodal/              DY Nodal
+Pendulum/           DY Pendulum
 scripts/            build, install, package, and UI test helpers (shot, click, lclick)
 docs/               screenshots
 ```

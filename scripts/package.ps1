@@ -1,11 +1,11 @@
 # Zip a built VST3 for sharing: dist\DY-<Module>-<version>-win-x64.zip
 #   .\scripts\package.ps1 -Module Sequencer | Nodal
-param([ValidateSet("Sequencer", "Nodal")] [string] $Module = "Sequencer", [string] $Config = "Release")
+param([ValidateSet("Sequencer", "Nodal", "Pendulum")] [string] $Module = "Sequencer", [string] $Config = "Release")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$product = @{ Sequencer = "DY Sequencer"; Nodal = "DY Nodal" }[$Module]
+$product = @{ Sequencer = "DY Sequencer"; Nodal = "DY Nodal"; Pendulum = "DY Pendulum" }[$Module]
 # target folder -> product name; Nodal ships an effect and an instrument
-$products = @{ Sequencer = @(, @("DYSequencer", "DY Sequencer")); Nodal = @(@("DYNodal", "DY Nodal"), @("DYNodalInstrument", "DY Nodal Instrument")) }[$Module]
+$products = @{ Sequencer = @(, @("DYSequencer", "DY Sequencer")); Nodal = @(@("DYNodal", "DY Nodal"), @("DYNodalInstrument", "DY Nodal Instrument")); Pendulum = @(, @("DYPendulum", "DY Pendulum")) }[$Module]
 foreach ($pr in $products) {
     $src = Join-Path $root "build\$Module\$($pr[0])_artefacts\$Config\VST3\$($pr[1]).vst3"
     if (-not (Test-Path $src)) { throw "Build first: $src not found" }
@@ -22,7 +22,28 @@ foreach ($pr in $products) {
     Copy-Item -Recurse (Join-Path $root "build\$Module\$($pr[0])_artefacts\$Config\VST3\$($pr[1]).vst3") (Join-Path $stage "$($pr[1]).vst3")
 }
 Copy-Item (Join-Path $root "LICENSE") $stage
-$readme = if ($Module -eq "Nodal") {
+$readme = if ($Module -eq "Pendulum") {
+@"
+DY Pendulum $version  (Windows x64, VST3 instrument, MIDI out)
+==============================================================
+
+A pendulum wave: each pendulum swings a little faster than the one before, so they
+drift apart into waves and come back into one line at the end of every cycle.
+Every swing through the middle plays a note.
+
+INSTALL
+  1. Copy the folder  "DY Pendulum.vst3"  into  C:\Program Files\Common Files\VST3\
+  2. Ableton Live: Options > Preferences > Plug-Ins > "Use VST3 Plug-In System Folders" = On, Rescan.
+  3. Browser > Plug-Ins > VST3 > dy > DY Pendulum  ->  drag onto a MIDI track. Press play.
+     You hear its built-in bell straight away.
+
+PLAY ANOTHER INSTRUMENT WITH IT
+  Turn "Preview sound" off. On a second MIDI track: MIDI From = the DY Pendulum track,
+  second box = "DY Pendulum", Monitor = In, and put any instrument on it.
+
+Source & updates: https://github.com/buttlerkid/sequencer
+"@
+} elseif ($Module -eq "Nodal") {
 @"
 DY Nodal $version  (Windows x64, VST3)
 ======================================
