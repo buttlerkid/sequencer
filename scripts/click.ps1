@@ -4,7 +4,7 @@
 #   .\scripts\click.ps1 -X 1170 -Y 57                 # click
 #   .\scripts\click.ps1 -X 300 -Y 500 -ToX 300 -ToY 380  # drag
 #   .\scripts\click.ps1 -X 300 -Y 500 -Double
-param([int] $X, [int] $Y, [int] $ToX = -1, [int] $ToY = -1, [switch] $Double)
+param([int] $X, [int] $Y, [string] $App = "DY Sequencer", [int] $ToX = -1, [int] $ToY = -1, [switch] $Double)
 Add-Type @"
 using System; using System.Runtime.InteropServices;
 public class Clk {
@@ -16,7 +16,7 @@ public class Clk {
   [DllImport("user32.dll")] public static extern bool SendMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
 }
 "@
-$p = Get-Process | Where-Object { $_.ProcessName -like "DY Sequencer*" } | Select-Object -First 1
+$p = Get-Process | Where-Object { $_.ProcessName -like "$App*" } | Select-Object -First 1
 if (-not $p) { throw "standalone not running" }
 $h = $p.MainWindowHandle
 $r = New-Object Clk+R; [Clk]::GetWindowRect($h, [ref]$r) | Out-Null

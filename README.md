@@ -8,6 +8,7 @@ scripts.
 |---|---|---|
 | [Sequencer](Sequencer/README.md) | DY Sequencer: 16-track Euclidean, scale-aware MIDI step sequencer with patterns, chains, conditions and chord follow | v0.5.0 |
 | [Nodal](Nodal/README.md) | DY Nodal: Chladni plate resonator, as an effect and as an instrument. Up to 32 tuned modes of four real free-edge plates (solved and checked against published values) and three 3D shells, body size stepped through a scale, six materials, 8-voice MIDI playing with mallet / pluck / bow / breath exciters, sidechain, LFOs / input follower / pitch follow, and GPU sand that shows which modes are ringing | v0.5.0 |
+| [Dub](Dub/README.md) | DY Dub: a step sequencer for audio. 32 steps in two banks with AB / AAB / AAAB patterns, per-step level, filter, resonance, pan, chance, filter-envelope depth, volume + filter envelopes and delay / reverb sends; chained steps, ping-pong delay with a high pass in the feedback, Room / Plate / Hall / Spring / Chamber reverbs, 3 LFOs + input follower assigned by right-clicking any knob | v0.1.0 |
 | [Pendulum](Pendulum/README.md) | DY Pendulum: a pendulum wave as a MIDI generator. Up to 24 pendulums drift into waves and line up again every cycle, each swing plays a scale note, song-position exact, layers and drum-pad mode to drive other tracks, built-in preview bell | v0.2.0 |
 
 ![DY Sequencer](docs/screenshot-v0.4-dark.png)
@@ -20,7 +21,7 @@ The first configure downloads JUCE 9.0.2 into `build/_deps`.
 ```powershell
 .\scripts\build.ps1                       # every module: VST3 + Standalone, plus engine tests
 .\scripts\build.ps1 -TestsOnly            # engine tests only (no JUCE)
-.\scripts\install.ps1 -Module Nodal       # copy a VST3 into Common Files\VST3 (asks for admin)
+.\scripts\install.ps1 -Module Dub         # copy a VST3 into Common Files\VST3 (asks for admin)
 .\scripts\package.ps1 -Module Sequencer   # zip for sharing -> dist\DY-Sequencer-<version>-win-x64.zip
 ```
 
@@ -33,6 +34,7 @@ CMakeLists.txt      suite: fetches JUCE once, shared compile settings, adds each
 Sequencer/          DY Sequencer (Source/, Tests/, README.md)
 Nodal/              DY Nodal
 Pendulum/           DY Pendulum
+Dub/                DY Dub
 scripts/            build, install, package, and UI test helpers (shot, click, lclick)
 docs/               screenshots
 ```

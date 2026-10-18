@@ -1,11 +1,11 @@
 # Zip a built VST3 for sharing: dist\DY-<Module>-<version>-win-x64.zip
 #   .\scripts\package.ps1 -Module Sequencer | Nodal
-param([ValidateSet("Sequencer", "Nodal", "Pendulum")] [string] $Module = "Sequencer", [string] $Config = "Release")
+param([ValidateSet("Sequencer", "Nodal", "Pendulum", "Dub")] [string] $Module = "Sequencer", [string] $Config = "Release")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$product = @{ Sequencer = "DY Sequencer"; Nodal = "DY Nodal"; Pendulum = "DY Pendulum" }[$Module]
+$product = @{ Sequencer = "DY Sequencer"; Nodal = "DY Nodal"; Pendulum = "DY Pendulum"; Dub = "DY Dub" }[$Module]
 # target folder -> product name; Nodal ships an effect and an instrument
-$products = @{ Sequencer = @(, @("DYSequencer", "DY Sequencer")); Nodal = @(@("DYNodal", "DY Nodal"), @("DYNodalInstrument", "DY Nodal Instrument")); Pendulum = @(, @("DYPendulum", "DY Pendulum")) }[$Module]
+$products = @{ Sequencer = @(, @("DYSequencer", "DY Sequencer")); Nodal = @(@("DYNodal", "DY Nodal"), @("DYNodalInstrument", "DY Nodal Instrument")); Pendulum = @(, @("DYPendulum", "DY Pendulum")); Dub = @(, @("DYDub", "DY Dub")) }[$Module]
 foreach ($pr in $products) {
     $src = Join-Path $root "build\$Module\$($pr[0])_artefacts\$Config\VST3\$($pr[1]).vst3"
     if (-not (Test-Path $src)) { throw "Build first: $src not found" }
@@ -22,7 +22,29 @@ foreach ($pr in $products) {
     Copy-Item -Recurse (Join-Path $root "build\$Module\$($pr[0])_artefacts\$Config\VST3\$($pr[1]).vst3") (Join-Path $stage "$($pr[1]).vst3")
 }
 Copy-Item (Join-Path $root "LICENSE") $stage
-$readme = if ($Module -eq "Pendulum") {
+$readme = if ($Module -eq "Dub") {
+@"
+DY Dub $version  (Windows x64, VST3 audio effect)
+=================================================
+
+A step sequencer for audio. Every step has its own level, filter, pan, chance,
+envelopes and delay / reverb sends, so a held chord becomes a rhythm and a loop
+becomes something else.
+
+INSTALL
+  1. Copy the folder  "DY Dub.vst3"  into  C:\Program Files\Common Files\VST3\
+  2. Ableton Live: Options > Preferences > Plug-Ins > "Use VST3 Plug-In System Folders" = On, Rescan.
+  3. Browser > Plug-Ins > VST3 > dy > DY Dub  ->  drag onto any audio track (or after an instrument).
+
+TRY
+  Pick a preset at the top. Put a held chord or a drum loop through it and press play.
+  Lanes: drag across bars to draw, click toggles, right-click a lane for tools.
+  Click a step number to edit its volume / filter envelope. Right-click a knob to
+  hand it to an LFO or the input follower.
+
+Source & updates: https://github.com/buttlerkid/sequencer
+"@
+} elseif ($Module -eq "Pendulum") {
 @"
 DY Pendulum $version  (Windows x64, VST3 instrument, MIDI out)
 ==============================================================
