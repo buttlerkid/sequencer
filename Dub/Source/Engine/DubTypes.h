@@ -156,6 +156,8 @@ struct GlobalParams
     bool   runAlways = true;       // run on our own clock while the host is stopped
     int    rate = 2;               // index into kRates
     float  swing = 0.0f;           // 0..0.5
+    float  glide = 0.0f;           // 0..1: step values slide into each other (fraction of a step)
+    float  offsetMs = 0.0f;        // -50..50: the steps land this much later (or earlier)
     int    length = kSteps;        // steps per pass, 1..16
     int    pattern = 0;            // index into kPatterns
     int    filterMode = FilterLP;
@@ -165,10 +167,12 @@ struct GlobalParams
 
     int    delayTime = 3;          // index into kDelayTimes
     float  delayHpHz = 300.0f, delayLpHz = 6000.0f;
-    bool   pingPong = true;
+    float  pingPong = 1.0f;        // 0 stereo echo .. 1 full ping-pong
 
     int    revType = RevPlate;
     float  revDecay = 0.5f, revTone = 0.5f;
+    float  revWidth = 1.0f;        // 0 mono .. 1 full stereo
+    float  revPreMs = 0.0f;        // added to the type's own pre-delay
 
     float  outputDb = 0.0f;
 

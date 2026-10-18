@@ -2,10 +2,6 @@
 
 namespace dy::dub {
 
-using dy::nodal::displayFont;
-using dy::nodal::bodyFont;
-using dy::nodal::monoFont;
-
 // ------------------------------------------------------------------ sources
 const char* sourceName (int i)
 {
@@ -43,7 +39,6 @@ Knob::Knob (APVTS& s, const juce::String& id, juce::String cap, int modTarget)
     slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 90, 16);
     slider.setMouseDragSensitivity (180);
-    slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     addAndMakeVisible (slider);
     att = std::make_unique<APVTS::SliderAttachment> (s, id, slider);
     if (auto* p = s.getParameter (id))
@@ -54,7 +49,7 @@ Knob::Knob (APVTS& s, const juce::String& id, juce::String cap, int modTarget)
     if (target != ModOff) slider.onRightClick = [this] { showMenu(); };
 }
 
-void Knob::resized() { slider.setBounds (getLocalBounds().withTrimmedTop (14)); }
+void Knob::resized() { slider.setBounds (getLocalBounds().withTrimmedTop (16)); }
 
 void Knob::paint (juce::Graphics& g)
 {
@@ -119,15 +114,18 @@ void Knob::updateModulation (const EngineTelemetry& tel)
 Combo::Combo (APVTS& s, const juce::String& id, juce::String cap) : caption (std::move (cap))
 {
     if (auto* c = dynamic_cast<juce::AudioParameterChoice*> (s.getParameter (id))) box.addItemList (c->choices, 1);
+    else if (auto* ip = dynamic_cast<juce::AudioParameterInt*> (s.getParameter (id)))
+        for (int v = ip->getRange().getStart(); v <= ip->getRange().getEnd(); ++v) box.addItem (juce::String (v), v - ip->getRange().getStart() + 1);
     addAndMakeVisible (box);
     att = std::make_unique<APVTS::ComboBoxAttachment> (s, id, box);
 }
-void Combo::resized() { box.setBounds (getLocalBounds().withTrimmedTop (15)); }
+void Combo::resized() { box.setBounds (getLocalBounds().withTrimmedTop (caption.isEmpty() ? 0 : 16)); }
 void Combo::paint (juce::Graphics& g)
 {
+    if (caption.isEmpty()) return;
     g.setColour (Colours::dim);
-    g.setFont (bodyFont (11.0f));
-    g.drawText (caption, getLocalBounds().removeFromTop (14), juce::Justification::centredLeft);
+    g.setFont (displayFont (9.0f));
+    g.drawText (caption.toUpperCase(), getLocalBounds().removeFromTop (14), juce::Justification::centred);
 }
 
 Toggle::Toggle (APVTS& s, const juce::String& id, juce::String text)
@@ -137,54 +135,16 @@ Toggle::Toggle (APVTS& s, const juce::String& id, juce::String text)
     att = std::make_unique<APVTS::ButtonAttachment> (s, id, *this);
 }
 
-HSlider::HSlider (APVTS& s, const juce::String& id, juce::String cap) : caption (std::move (cap))
+void Section::paint (juce::Graphics& g)
 {
-    slider.setSliderStyle (juce::Slider::LinearHorizontal);
-    slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-    slider.onValueChange = [this] { repaint(); };
-    addAndMakeVisible (slider);
-    att = std::make_unique<APVTS::SliderAttachment> (s, id, slider);
-    if (auto* p = s.getParameter (id)) slider.setDoubleClickReturnValue (true, p->convertFrom0to1 (p->getDefaultValue()));
-}
-void HSlider::resized() { slider.setBounds (getLocalBounds().withTrimmedTop (15)); }
-void HSlider::paint (juce::Graphics& g)
-{
-    g.setColour (Colours::dim);
-    g.setFont (bodyFont (11.0f));
-    g.drawText (caption, getLocalBounds().removeFromTop (14), juce::Justification::centredLeft);
-    g.setColour (Colours::text);
-    g.setFont (monoFont (11.0f));
-    g.drawText (slider.getTextFromValue (slider.getValue()), getLocalBounds().removeFromTop (14), juce::Justification::centredRight);
-}
-
-ChoiceRow::ChoiceRow (APVTS& s, const juce::String& id, juce::StringArray l)
-    : param (*s.getParameter (id)), labels (std::move (l)),
-      attachment (*s.getParameter (id), [this] (float v) { current = juce::roundToInt (v); repaint(); }, nullptr)
-{
-    if (labels.isEmpty())
-        if (auto* c = dynamic_cast<juce::AudioParameterChoice*> (&param)) labels = c->choices;
-    attachment.sendInitialUpdate();
-}
-
-void ChoiceRow::paint (juce::Graphics& g)
-{
-    const float w = getWidth() / static_cast<float> (labels.size());
-    for (int i = 0; i < labels.size(); ++i)
+    auto r = getLocalBounds().toFloat();
+    drawInset (g, r, 8.0f);
+    if (title.isNotEmpty())
     {
-        auto r = juce::Rectangle<float> (i * w, 0.0f, w, static_cast<float> (getHeight())).reduced (1.5f, 0.0f);
-        const bool on = i == current;
-        g.setColour (on ? Colours::brass : Colours::panel2);
-        g.fillRoundedRectangle (r, 4.0f);
-        g.setColour (on ? Colours::ink : Colours::text);
-        g.setFont (bodyFont (11.0f, on));
-        g.drawFittedText (labels[i], r.toNearestInt(), juce::Justification::centred, 1, 0.7f);
+        g.setColour (Colours::bright);
+        g.setFont (displayFont (12.5f));
+        g.drawText (title, r.removeFromTop (28.0f), juce::Justification::centred);
     }
-}
-
-void ChoiceRow::mouseDown (const juce::MouseEvent& e)
-{
-    const int i = clampT (static_cast<int> (e.position.x / (getWidth() / static_cast<float> (labels.size()))), 0, labels.size() - 1);
-    attachment.setValueAsCompleteGesture (static_cast<float> (i));
 }
 
 void Scope::push()
@@ -197,9 +157,9 @@ void Scope::push()
 void Scope::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
-    g.setColour (Colours::scopeBg);
+    g.setColour (juce::Colours::black.withAlpha (0.35f));
     g.fillRoundedRectangle (r, 5.0f);
-    r = r.reduced (4.0f, 6.0f);
+    r = r.reduced (4.0f, 8.0f);
     const bool uni = source == kNumLfos;
     g.setColour (Colours::line);
     g.drawHorizontalLine (juce::roundToInt (uni ? r.getBottom() : r.getCentreY()), r.getX(), r.getRight());
@@ -213,7 +173,7 @@ void Scope::paint (juce::Graphics& g)
         if (i == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
     }
     g.setColour (sourceColour (source));
-    g.strokePath (p, juce::PathStrokeType (1.5f));
+    g.strokePath (p, juce::PathStrokeType (1.6f));
 }
 
 SourcePage::SourcePage (DubProcessor& p, int src) : scope (p.telemetry(), src), source (src), state (p.apvts)
@@ -227,11 +187,12 @@ SourcePage::SourcePage (DubProcessor& p, int src) : scope (p.telemetry(), src), 
     {
         shape = std::make_unique<Combo> (state, PID::lfo (src, "Shape"), "Shape");
         div = std::make_unique<Combo> (state, PID::lfo (src, "Div"), "Length");
-        sync = std::make_unique<Toggle> (state, PID::lfo (src, "Sync"), "Sync to song");
+        sync = std::make_unique<Toggle> (state, PID::lfo (src, "Sync"), "Sync");
         rate = std::make_unique<Knob> (state, PID::lfo (src, "Rate"), "Rate");
         for (juce::Component* c : { static_cast<juce::Component*> (shape.get()), static_cast<juce::Component*> (div.get()),
                                     static_cast<juce::Component*> (sync.get()), static_cast<juce::Component*> (rate.get()) })
             addAndMakeVisible (c);
+        sync->setTooltip ("Locked to the song (length in bars) or free running (rate in Hz)");
     }
     else
     {
@@ -247,30 +208,26 @@ void SourcePage::resized()
 {
     auto r = getLocalBounds();
     auto col1 = r.removeFromLeft (150);
-    if (shape != nullptr)
-    {
-        shape->setBounds (col1.removeFromTop (40));
-        col1.removeFromTop (8);
-    }
-    target->setBounds (col1.removeFromTop (40));
-    r.removeFromLeft (10);
+    if (shape != nullptr) { shape->setBounds (col1.removeFromTop (44)); col1.removeFromTop (10); }
+    target->setBounds (col1.removeFromTop (44));
+    r.removeFromLeft (14);
     if (sync != nullptr)
     {
-        auto col2 = r.removeFromLeft (112);
-        sync->setBounds (col2.removeFromTop (26).withTrimmedTop (2));
-        col2.removeFromTop (14);
-        div->setBounds (col2.removeFromTop (40));
-        r.removeFromLeft (6);
-        rate->setBounds (r.removeFromLeft (66).withHeight (88));
+        auto col2 = r.removeFromLeft (110);
+        sync->setBounds (col2.removeFromTop (28).withTrimmedTop (2));
+        col2.removeFromTop (8);
+        div->setBounds (col2.removeFromTop (44));
+        r.removeFromLeft (8);
+        rate->setBounds (r.removeFromLeft (76).withHeight (100));
     }
     else
     {
-        attack->setBounds (r.removeFromLeft (66).withHeight (88));
-        release->setBounds (r.removeFromLeft (66).withHeight (88));
+        attack->setBounds (r.removeFromLeft (76).withHeight (100));
+        release->setBounds (r.removeFromLeft (76).withHeight (100));
     }
-    amount->setBounds (r.removeFromLeft (66).withHeight (88));
-    r.removeFromLeft (8);
-    scope.setBounds (r.withHeight (88));
+    amount->setBounds (r.removeFromLeft (76).withHeight (100));
+    r.removeFromLeft (10);
+    scope.setBounds (r.withHeight (100));
 }
 
 void SourcePage::tick()
@@ -280,77 +237,191 @@ void SourcePage::tick()
         const bool s = sync->getToggleState();
         div->setEnabled (s);
         rate->setEnabled (! s);
-        rate->setAlpha (s ? 0.4f : 1.0f);
         div->setAlpha (s ? 1.0f : 0.4f);
     }
     scope.push();
 }
 
+void ModSummary::paint (juce::Graphics& g)
+{
+    const auto& tel = proc.telemetry();
+    const float rowH = getHeight() / static_cast<float> (kNumSources);
+    for (int i = 0; i < kNumSources; ++i)
+    {
+        auto r = juce::Rectangle<float> (0.0f, i * rowH, static_cast<float> (getWidth()), rowH).reduced (2.0f, 3.0f);
+        const int t = static_cast<int> (proc.apvts.getRawParameterValue (sourceTargetId (i))->load());
+        const float amt = proc.apvts.getRawParameterValue (sourceAmountId (i))->load();
+        const bool active = t != ModOff && std::abs (amt) > 0.001f;
+        drawRaised (g, r, 4.0f);
+        const auto col = sourceColour (i);
+        g.setColour (active ? col : col.withAlpha (0.3f));
+        g.fillEllipse (r.getX() + 10.0f, r.getCentreY() - 4.0f, 8.0f, 8.0f);
+        g.setFont (displayFont (10.0f));
+        g.setColour (active ? Colours::text : Colours::dim);
+        g.drawText (juce::String (sourceName (i)).toUpperCase(), r.withTrimmedLeft (26.0f).withWidth (80.0f), juce::Justification::centredLeft);
+        g.setFont (bodyFont (12.5f));
+        g.drawText (t == ModOff ? juce::String ("not assigned") : juce::String (juce::CharPointer_UTF8 ("\xe2\x86\x92 ")) + targetDef (t).name,
+                    r.withTrimmedLeft (106.0f).withWidth (140.0f), juce::Justification::centredLeft);
+        if (t != ModOff)
+        {
+            g.setFont (monoFont (11.5f));
+            g.setColour (Colours::brass);
+            g.drawText ((amt > 0 ? "+" : "") + juce::String (juce::roundToInt (amt * 100.0f)) + "%", r.withTrimmedLeft (246.0f).withWidth (56.0f),
+                        juce::Justification::centredRight);
+        }
+        // the live value
+        auto bar = juce::Rectangle<float> (r.getRight() - 96.0f, r.getCentreY() - 3.0f, 84.0f, 6.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.6f));
+        g.fillRoundedRectangle (bar, 3.0f);
+        const float v = tel.source[static_cast<size_t> (i)].load();
+        g.setColour (col.withAlpha (active ? 0.9f : 0.35f));
+        if (i == kNumLfos) g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * clampT (v, 0.0f, 1.0f)), 3.0f);
+        else
+        {
+            const float cx = bar.getCentreX(), x = cx + v * bar.getWidth() * 0.5f;
+            g.fillRoundedRectangle (juce::Rectangle<float> (std::min (cx, x), bar.getY(), std::abs (x - cx) + 1.0f, bar.getHeight()), 2.0f);
+        }
+    }
+}
+
+void ModSummary::mouseDown (const juce::MouseEvent& e)
+{
+    if (onPick) onPick (clampT (static_cast<int> (e.position.y / (getHeight() / static_cast<float> (kNumSources))), 0, kNumSources - 1));
+}
+
 // ------------------------------------------------------------------ editor
 DubEditor::DubEditor (DubProcessor& p)
     : AudioProcessorEditor (p), proc (p),
-      rate (p.apvts, PID::rate, "Seq rate"), pattern (p.apvts, PID::pattern, "Pattern"), run (p.apvts, PID::run, "Run"),
-      length (p.apvts, PID::length, "Steps"), swing (p.apvts, PID::swing, "Swing"),
-      grid (p), env (p),
-      filterMode (p.apvts, PID::filterMode, { "LP", "BP", "HP" }), revType (p.apvts, PID::revType),
-      cutoff (p.apvts, PID::cutoff, "Cutoff", ModCutoff), res (p.apvts, PID::res, "Res", ModRes), envDepth (p.apvts, PID::envDepth, "Env depth", ModEnvDepth),
-      dlyTime (p.apvts, PID::dlyTime, ""), pingPong (p.apvts, PID::pingPong, "Ping-pong"),
-      dlyFb (p.apvts, PID::dlyFb, "Feedback", ModDelayFb), dlyHp (p.apvts, PID::dlyHp, "High pass"), dlyLp (p.apvts, PID::dlyLp, "Tone"),
-      dlyLevel (p.apvts, PID::dlyLevel, "Level", ModDelayLevel),
-      revSize (p.apvts, PID::revSize, "Size", ModRevSize), revDecay (p.apvts, PID::revDecay, "Decay"), revTone (p.apvts, PID::revTone, "Tone"),
-      revLevel (p.apvts, PID::revLevel, "Level", ModRevLevel),
-      pan (p.apvts, PID::pan, "Pan", ModPan), level (p.apvts, PID::level, "Level", ModLevel), mix (p.apvts, PID::mix, "Mix", ModMix),
-      output (p.apvts, PID::output, "Output")
+      pattern (p.apvts, PID::pattern, "Pattern"),
+      strips (p),
+      cutoff (p.apvts, PID::cutoff, "Cutoff", ModCutoff), res (p.apvts, PID::res, "Resonance", ModRes),
+      level (p.apvts, PID::level, "Volume", ModLevel), swing (p.apvts, PID::swing, "Swing"), output (p.apvts, PID::output, "Output"),
+      glide (p.apvts, PID::glide, "Glide"), offset (p.apvts, PID::offset, "Offset"),
+      mix (p.apvts, PID::mix, "Dry/Wet", ModMix), pan (p.apvts, PID::pan, "Pan", ModPan),
+      envDepth2 (p.apvts, PID::envDepth, "Env depth", ModEnvDepth),
+      dlyLevel (p.apvts, PID::dlyLevel, "Mix", ModDelayLevel), dlyFb (p.apvts, PID::dlyFb, "Feedback", ModDelayFb),
+      dlyLp (p.apvts, PID::dlyLp, "Tone"), dlyHp (p.apvts, PID::dlyHp, "HP Freq"), pingPong (p.apvts, PID::pingPong, "Ping-pong"),
+      revLevel (p.apvts, PID::revLevel, "Mix", ModRevLevel), revSize (p.apvts, PID::revSize, "Size", ModRevSize),
+      revTone (p.apvts, PID::revTone, "Damp"), revWidth (p.apvts, PID::revWidth, "Width"), revDecay (p.apvts, PID::revDecay, "Decay"),
+      revPre (p.apvts, PID::revPre, "Pre-dly"),
+      filterMode (p.apvts, PID::filterMode, "Filter"), rate (p.apvts, PID::rate, "Seq rate"), length (p.apvts, PID::length, "Steps"),
+      run (p.apvts, PID::run, "Run"), dlyTime (p.apvts, PID::dlyTime, "Dly rate"), revType (p.apvts, PID::revType, "Reverb"),
+      env (p), envDepth (p.apvts, PID::envDepth, "Depth", ModEnvDepth),
+      summary (p), grid (p)
 {
     setLookAndFeel (&lnf);
     addAndMakeVisible (content);
 
-    preset.addItemList (presetNames(), 1);
-    preset.setSelectedItemIndex (p.currentPreset, juce::dontSendNotification);
-    preset.onChange = [this] { const int i = preset.getSelectedItemIndex(); if (i >= 0 && i != proc.currentPreset) { proc.setCurrentProgram (i); grid.repaint(); env.repaint(); } };
-    prevPreset.onClick = [this] { preset.setSelectedItemIndex ((proc.currentPreset + preset.getNumItems() - 1) % preset.getNumItems()); };
-    nextPreset.onClick = [this] { preset.setSelectedItemIndex ((proc.currentPreset + 1) % preset.getNumItems()); };
-
-    for (auto* b : { &bankA, &bankB })
+    // header
+    category.addItem ("All", 1);
+    category.addItem ("Factory", 2);
+    category.addItem ("User", 3);
+    category.setSelectedId (1, juce::dontSendNotification);
+    category.onChange = [this] { refreshPresets(); };
+    preset.setTextWhenNothingSelected ("Preset");
+    preset.onChange = [this]
     {
-        b->setClickingTogglesState (false);
-        b->setTooltip ("Show this bank's steps (the pattern decides which one plays)");
-    }
+        const int id = preset.getSelectedId();
+        if (id >= 1000 && id - 1000 < userFiles.size()) loadUserPreset (proc, userFiles[id - 1000]);
+        else if (id > 0 && id - 1 != proc.currentPreset) proc.setCurrentProgram (id - 1);
+        else return;
+        shownName = proc.presetName;
+        strips.tick();
+    };
+    prevPreset.onClick = [this] { stepPreset (-1); };
+    nextPreset.onClick = [this] { stepPreset (1); };
+    save.onClick = [this] { savePreset(); };
+    save.setTooltip ("Save this sound as a user preset");
+    random.onClick = [this]
+    {
+        randomiseSteps (proc.steps, viewBank, RandomAll);
+        proc.currentPreset = -1;
+        proc.presetName = "Random";
+        showPresetName();
+    };
+    random.setTooltip ("Roll a new pattern for the bank on view: every lane, sends and envelopes");
+    for (auto* b : { &bankA, &bankB }) b->setTooltip ("Show this bank's steps (the pattern decides which one plays)");
     bankA.onClick = [this] { setBank (0); };
     bankB.onClick = [this] { setBank (1); };
-    copyBank.setTooltip ("Copy every step of the bank on view to the other bank");
-    copyBank.onClick = [this]
-    {
-        for (int s = 0; s < kSteps; ++s) proc.steps.setStep (1 - viewBank, s, proc.steps.getStep (viewBank, s));
-    };
-    grid.onSelect = [this] (int s) { env.step = s; env.repaint(); };
-    rate.box.setTooltip ("How long one step is");
     pattern.box.setTooltip ("Which bank plays on each pass through the steps: AAB plays A twice, then B");
-    dlyTime.box.setTooltip ("Delay time, locked to the tempo");
+
+    // strips and the row under them
+    strips.onSelect = [this] (int s) { env.step = s; grid.selected = s; env.repaint(); grid.repaint(); };
+    rndCut.onClick = [this] { randomiseSteps (proc.steps, viewBank, RandomCut); };
+    rndRes.onClick = [this] { randomiseSteps (proc.steps, viewBank, RandomRes); };
+    rndVol.onClick = [this] { randomiseSteps (proc.steps, viewBank, RandomVol); };
+    rndOn.onClick  = [this] { randomiseSteps (proc.steps, viewBank, RandomOn); };
+    copyBank.onClick = [this] { for (int s = 0; s < kSteps; ++s) proc.steps.setStep (1 - viewBank, s, proc.steps.getStep (viewBank, s)); };
+    copyBank.setTooltip ("Copy every step of the bank on view to the other bank");
+    static const char* tabNames[kNumPages] = { "Adv", "Main", "Env", "Mod" };
+    static const char* tabTips[kNumPages] = { "Pan, chance, filter envelope depth and sends, per step", "Sequencer, delay and reverb",
+                                              "Volume and filter envelopes of the selected step", "LFOs and the input follower" };
+    for (int i = 0; i < kNumPages; ++i)
+    {
+        auto& t = tabs[static_cast<size_t> (i)];
+        t.setButtonText (tabNames[i]);
+        t.setTooltip (tabTips[i]);
+        t.getProperties().set ("tab", true);
+        t.onClick = [this, i] { setPage (i); };
+    }
+
+    for (auto* c : std::initializer_list<juce::Component*> { &category, &preset, &prevPreset, &nextPreset, &save, &random, &bankA, &bankB, &pattern,
+                                                              &strips, &rndCut, &rndRes, &rndVol, &rndOn, &copyBank })
+        content.addAndMakeVisible (c);
+    for (auto& t : tabs) content.addAndMakeVisible (t);
+    for (auto& pg : pages) content.addChildComponent (pg);
+
+    // MAIN
+    auto& main = pages[PageMain];
+    for (auto* s : { &secSeq, &secDelay, &secReverb }) main.addAndMakeVisible (s);
+    for (auto* k : { &cutoff, &res, &level, &swing, &output, &glide, &offset, &mix, &pan, &envDepth2 }) secSeq.addAndMakeVisible (k);
+    for (auto* k : { &dlyLevel, &dlyFb, &dlyLp, &dlyHp, &pingPong }) secDelay.addAndMakeVisible (k);
+    for (auto* k : { &revLevel, &revSize, &revTone, &revWidth, &revDecay, &revPre }) secReverb.addAndMakeVisible (k);
+    for (auto* c : { &filterMode, &rate, &length, &run, &dlyTime, &revType }) main.addAndMakeVisible (c);
+    cutoff.slider.setTooltip ("Moves every step's cutoff up or down (octaves) - right-click to modulate");
+    glide.slider.setTooltip ("Step values slide into each other instead of jumping");
+    offset.slider.setTooltip ("Moves the steps later or earlier against the beat");
+    pingPong.slider.setTooltip ("0 %: a stereo echo. 100 %: the repeats bounce left - right");
     run.box.setTooltip ("Always: keeps sequencing on its own clock while the song is stopped");
 
-    for (auto* c : std::initializer_list<juce::Component*> { &preset, &prevPreset, &nextPreset, &bankA, &bankB, &copyBank, &rate, &pattern, &run,
-                                                              &length, &swing, &grid, &env, &filterMode, &revType, &cutoff, &res, &envDepth,
-                                                              &dlyTime, &pingPong, &dlyFb, &dlyHp, &dlyLp, &dlyLevel, &revSize, &revDecay, &revTone,
-                                                              &revLevel, &pan, &level, &mix, &output })
-        content.addAndMakeVisible (c);
+    // ENV
+    auto& envPage = pages[PageEnv];
+    envPage.addAndMakeVisible (secEnv);
+    envPage.addAndMakeVisible (secEnvDepth);
+    secEnv.addAndMakeVisible (env);
+    secEnvDepth.addAndMakeVisible (envDepth);
+    envDepth.slider.setTooltip ("Scales every step's filter envelope depth (the F.ENV lane on the ADV page)");
 
+    // MOD
+    auto& modPage = pages[PageMod];
+    modPage.addAndMakeVisible (secMod);
+    modPage.addAndMakeVisible (secRouting);
     for (int i = 0; i < kNumSources; ++i)
     {
         auto& t = srcTabs[static_cast<size_t> (i)];
         t.setButtonText (sourceName (i));
-        t.setColour (juce::TextButton::buttonOnColourId, sourceColour (i));
-        t.setColour (juce::TextButton::textColourOnId, Colours::ink);
+        t.getProperties().set ("accent", static_cast<juce::int64> (sourceColour (i).getARGB()));
         t.onClick = [this, i] { setSource (i); };
-        content.addAndMakeVisible (t);
-        pages.push_back (std::make_unique<SourcePage> (p, i));
-        content.addChildComponent (*pages.back());
+        secMod.addAndMakeVisible (t);
+        srcPages.push_back (std::make_unique<SourcePage> (p, i));
+        secMod.addChildComponent (*srcPages.back());
     }
-    for (auto* k : { &cutoff, &res, &envDepth, &dlyFb, &dlyLevel, &revSize, &revLevel, &pan, &level, &mix })
-        k->onAssigned = [this] (int s) { setSource (s); };
+    secRouting.addAndMakeVisible (summary);
+    summary.onPick = [this] (int s) { setSource (s); };
+    for (auto* k : { &cutoff, &res, &envDepth, &envDepth2, &dlyFb, &dlyLevel, &revSize, &revLevel, &pan, &level, &mix })
+        k->onAssigned = [this] (int s) { setSource (s); setPage (PageMod); };
 
+    // ADV: the per-step lanes that are not on the strips, in the strips' columns
+    pages[PageAdv].addAndMakeVisible (secAdv);
+    secAdv.addAndMakeVisible (grid);
+    grid.onSelect = [this] (int s) { strips.select (s); };
+
+    refreshPresets();
     setBank (0);
     setSource (0);
+    // UI tests: DY_DUB_PAGE=0..3 opens ADV / MAIN / ENV / MOD
+    setPage (juce::jlimit (0, kNumPages - 1, juce::SystemStats::getEnvironmentVariable ("DY_DUB_PAGE", "1").getIntValue()));
+    sendLookAndFeelChange();          // the controls were made before the look was set: rebuild their value boxes
     setResizable (true, true);
     setResizeLimits (kW / 2, kH / 2, kW * 2, kH * 2);
     getConstrainer()->setFixedAspectRatio (static_cast<double> (kW) / kH);
@@ -361,9 +432,78 @@ DubEditor::DubEditor (DubProcessor& p)
 
 DubEditor::~DubEditor() { stopTimer(); setLookAndFeel (nullptr); }
 
+void DubEditor::refreshPresets()
+{
+    const int cat = category.getSelectedId();
+    preset.clear (juce::dontSendNotification);
+    if (cat != 3)
+    {
+        if (cat == 1) preset.addSectionHeading ("Factory");
+        auto names = presetNames();
+        for (int i = 0; i < names.size(); ++i) preset.addItem (names[i], i + 1);
+    }
+    userFiles = userPresets();
+    if (cat != 2 && ! userFiles.isEmpty())
+    {
+        if (cat == 1) preset.addSectionHeading ("User");
+        for (int i = 0; i < userFiles.size(); ++i) preset.addItem (userFiles[i].getFileNameWithoutExtension(), 1000 + i);
+    }
+    showPresetName();
+}
+
+void DubEditor::showPresetName()
+{
+    shownName = proc.presetName;
+    if (proc.currentPreset >= 0 && preset.indexOfItemId (proc.currentPreset + 1) >= 0)
+    {
+        preset.setSelectedId (proc.currentPreset + 1, juce::dontSendNotification);
+        return;
+    }
+    for (int i = 0; i < userFiles.size(); ++i)
+        if (proc.currentPreset < 0 && userFiles[i].getFileNameWithoutExtension() == juce::File::createLegalFileName (proc.presetName))
+        {
+            preset.setSelectedId (1000 + i, juce::dontSendNotification);
+            return;
+        }
+    preset.setText (proc.presetName, juce::dontSendNotification);
+}
+
+void DubEditor::stepPreset (int delta)
+{
+    const int n = preset.getNumItems();
+    if (n == 0) return;
+    int i = preset.getSelectedItemIndex();
+    i = i < 0 ? (delta > 0 ? 0 : n - 1) : (i + delta + n) % n;
+    preset.setSelectedItemIndex (i, juce::sendNotificationSync);
+}
+
+void DubEditor::savePreset()
+{
+    saveDialog = std::make_unique<juce::AlertWindow> ("Save preset", "Name for this sound:", juce::MessageBoxIconType::NoIcon, this);
+    saveDialog->setLookAndFeel (&lnf);
+    saveDialog->addTextEditor ("name", proc.presetName == "Random" ? juce::String() : proc.presetName);
+    saveDialog->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    saveDialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<DubEditor> safe (this);
+    saveDialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe] (int r)
+    {
+        if (safe == nullptr || safe->saveDialog == nullptr) return;
+        const auto name = safe->saveDialog->getTextEditorContents ("name");
+        safe->saveDialog->setVisible (false);
+        if (r == 1 && name.trim().isNotEmpty())
+        {
+            if (! saveUserPreset (safe->proc, name))
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Save preset", "Could not write to\n" + userPresetFolder().getFullPathName());
+            safe->category.setSelectedId (1, juce::dontSendNotification);
+            safe->refreshPresets();
+        }
+    }), false);
+}
+
 void DubEditor::setBank (int b)
 {
     viewBank = b;
+    strips.setBank (b);
     grid.bank = env.bank = b;
     bankA.setToggleState (b == 0, juce::dontSendNotification);
     bankB.setToggleState (b == 1, juce::dontSendNotification);
@@ -372,91 +512,61 @@ void DubEditor::setBank (int b)
     env.repaint();
 }
 
+void DubEditor::setPage (int pg)
+{
+    page = pg;
+    for (int i = 0; i < kNumPages; ++i)
+    {
+        tabs[static_cast<size_t> (i)].setToggleState (i == pg, juce::dontSendNotification);
+        pages[static_cast<size_t> (i)].setVisible (i == pg);
+    }
+}
+
 void DubEditor::setSource (int s)
 {
     viewSource = s;
     for (int i = 0; i < kNumSources; ++i)
     {
         srcTabs[static_cast<size_t> (i)].setToggleState (i == s, juce::dontSendNotification);
-        pages[static_cast<size_t> (i)]->setVisible (i == s);
-    }
-}
-
-void DubEditor::panel (juce::Graphics& g, juce::Rectangle<int> r, const char* title) const
-{
-    g.setColour (Colours::panel);
-    g.fillRoundedRectangle (r.toFloat(), 8.0f);
-    g.setColour (Colours::line);
-    g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 8.0f, 1.0f);
-    if (title != nullptr)
-    {
-        g.setColour (Colours::dim);
-        g.setFont (displayFont (10.5f));
-        g.drawText (title, r.getX() + 12, r.getY() + 8, 200, 14, juce::Justification::centredLeft);
+        srcPages[static_cast<size_t> (i)]->setVisible (i == s);
     }
 }
 
 void DubEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (Colours::frame);
+    g.fillAll (Colours::page);
     const float s = getWidth() / static_cast<float> (kW);
     g.addTransform (juce::AffineTransform::scale (s));
-    g.setColour (Colours::line);
-    g.fillRect (0, 46, kW, 1);
-    g.setFont (displayFont (19.0f));
-    g.setColour (Colours::text);
-    g.drawText ("DY", 16, 0, 40, 46, juce::Justification::centredLeft);
-    g.setColour (Colours::brass);
-    g.drawText ("DUB", 48, 0, 100, 46, juce::Justification::centredLeft);
+
+    // the body: a brushed charcoal slab
+    juce::ColourGradient slab (Colours::frameTop, 0.0f, 0.0f, Colours::frame.darker (0.15f), 0.0f, static_cast<float> (kH), false);
+    g.setGradientFill (slab);
+    g.fillRect (0, 0, kW, kH);
+    for (int y = 0; y < kH; y += 2)
+    {
+        g.setColour (juce::Colours::white.withAlpha ((y / 2) % 3 == 0 ? 0.008f : 0.0f));
+        g.drawHorizontalLine (y, 0.0f, static_cast<float> (kW));
+    }
+
+    // header
+    drawLogo (g, { 16.0f, 11.0f, 36.0f, 36.0f });
+    g.setFont (displayFont (22.0f));
+    g.setColour (Colours::bright);
+    g.drawText ("DY DUB", 62, 4, 180, 34, juce::Justification::centredLeft);
     g.setColour (Colours::dim);
-    g.setFont (monoFont (11.0f));
-    g.drawText ("v" DY_VERSION_STRING "  step sequencer effect", 100, 0, 240, 46, juce::Justification::centredLeft);
+    g.setFont (displayFont (8.5f));
+    g.drawText ("STEP SEQUENCER FX  v" DY_VERSION_STRING, 64, 36, 220, 12, juce::Justification::centredLeft);
 
     const auto& tel = proc.telemetry();
     const bool synced = proc.hostSynced.load(), running = tel.running.load();
+    auto st = juce::Rectangle<int> (kW - 150, 10, 136, 40);
+    drawInset (g, st.toFloat(), 4.0f);
+    g.setFont (monoFont (13.0f));
+    g.setColour (Colours::brass);
+    g.drawText (juce::String (proc.shownBpm.load(), 1) + " BPM", st.withHeight (22).translated (0, 2), juce::Justification::centred);
+    g.setFont (displayFont (8.5f));
     g.setColour (synced ? Colours::teal : Colours::dim);
-    juce::String status = juce::String (proc.shownBpm.load(), 1) + " bpm   " + (synced ? "synced to the song" : running ? "own clock" : "waiting for play");
-    if (running && tel.step.load() >= 0)
-        status << "   bank " << (tel.bank.load() == 0 ? "A" : "B") << " step " << (tel.step.load() + 1);
-    g.drawText (status, kW - 420, 0, 404, 46, juce::Justification::centredRight);
-
-    panel (g, rSeq, nullptr);
-    panel (g, rGrid, nullptr);
-    panel (g, rEnv, nullptr);
-    panel (g, rFilter, "FILTER");
-    panel (g, rDelay, "DELAY");
-    panel (g, rReverb, "REVERB");
-    panel (g, rMod, "MODULATION");
-    panel (g, rOut, "OUTPUT");
-
-    // which bank is playing: a dot beside its button
-    if (running && tel.step.load() >= 0)
-    {
-        auto& b = tel.bank.load() == 0 ? bankA : bankB;
-        g.setColour (Colours::brass);
-        g.fillEllipse (static_cast<float> (b.getRight()) - 9.0f, static_cast<float> (b.getY()) + 3.0f, 6.0f, 6.0f);
-    }
-    g.setColour (Colours::dim);
-    g.setFont (displayFont (9.5f));
-    g.drawText ("BANK", rSeq.getX() + 12, rSeq.getY() + 6, 60, 14, juce::Justification::centredLeft);
-
-    // in / out meters in the output panel
-    auto m = juce::Rectangle<int> (rOut.getX() + 14, rOut.getBottom() - 30, rOut.getWidth() - 28, 18);
-    const float pk[2] = { tel.inPeak.load(), tel.outPeak.load() };
-    for (int i = 0; i < 2; ++i)
-    {
-        auto row = m.removeFromTop (8).toFloat();
-        m.removeFromTop (2);
-        g.setColour (Colours::scopeBg);
-        g.fillRoundedRectangle (row.withTrimmedLeft (28.0f), 3.0f);
-        const float db = pk[i] > 1e-5f ? 20.0f * std::log10 (pk[i]) : -100.0f;
-        const float t = clampT ((db + 48.0f) / 54.0f, 0.0f, 1.0f);
-        g.setColour (db > -0.5f ? juce::Colour (0xffe58f8f) : Colours::brass);
-        g.fillRoundedRectangle (row.withTrimmedLeft (28.0f).withWidth ((row.getWidth() - 28.0f) * t), 3.0f);
-        g.setColour (Colours::dim);
-        g.setFont (monoFont (9.0f));
-        g.drawText (i == 0 ? "IN" : "OUT", row.withWidth (26.0f).expanded (0.0f, 2.0f), juce::Justification::centredLeft);
-    }
+    g.drawText (synced ? "SYNCED TO SONG" : running ? "OWN CLOCK" : "WAITING FOR PLAY", st.withTrimmedTop (22).withHeight (14), juce::Justification::centred);
 }
 
 void DubEditor::resized()
@@ -467,99 +577,92 @@ void DubEditor::resized()
     content.setBounds (0, 0, kW, kH);
 
     const int pad = 12;
-    preset.setBounds (440, 10, 230, 26);
-    prevPreset.setBounds (406, 10, 30, 26);
-    nextPreset.setBounds (674, 10, 30, 26);
+    // header: preset browser, bank keys, pattern
+    category.setBounds (300, 16, 92, 28);
+    prevPreset.setBounds (398, 16, 28, 28);
+    preset.setBounds (430, 16, 290, 28);
+    nextPreset.setBounds (724, 16, 28, 28);
+    save.setBounds (764, 16, 70, 28);
+    random.setBounds (840, 16, 88, 28);
+    bankA.setBounds (950, 16, 32, 28);
+    bankB.setBounds (986, 16, 32, 28);
+    pattern.setBounds (1032, 0, 120, 44);
 
-    rSeq = { pad, 56, kW - 2 * pad, 58 };
+    strips.setBounds (pad, 62, kW - 2 * pad, 410);
+
+    const int rowY = strips.getBottom() + 8;
+    int x = pad;
+    for (auto* b : { &rndCut, &rndRes, &rndVol, &rndOn }) { b->setBounds (x, rowY, 128, 30); x += 134; }
+    copyBank.setBounds (x + 6, rowY, 120, 30);
+    int tx = kW - pad - kNumPages * 112;
+    for (auto& t : tabs) { t.setBounds (tx, rowY, 108, 30); tx += 112; }
+
+    const auto pageArea = juce::Rectangle<int> (pad, rowY + 38, kW - 2 * pad, kH - rowY - 38 - pad);
+    for (auto& pg : pages) pg.setBounds (pageArea);
+    const int W = pageArea.getWidth(), H = pageArea.getHeight();
+
+    auto gridOf = [] (juce::Rectangle<int> r, std::initializer_list<Knob*> ks, int cols)
     {
-        auto r = rSeq.reduced (12, 8);
-        auto bankArea = r.removeFromLeft (220).withTrimmedTop (14);
-        bankA.setBounds (bankArea.removeFromLeft (48).withHeight (26));
-        bankArea.removeFromLeft (6);
-        bankB.setBounds (bankArea.removeFromLeft (48).withHeight (26));
-        bankArea.removeFromLeft (10);
-        copyBank.setBounds (bankArea.withHeight (26));
-        r.removeFromLeft (20);
-        rate.setBounds (r.removeFromLeft (110)); r.removeFromLeft (12);
-        pattern.setBounds (r.removeFromLeft (130)); r.removeFromLeft (12);
-        length.setBounds (r.removeFromLeft (200)); r.removeFromLeft (16);
-        swing.setBounds (r.removeFromLeft (200)); r.removeFromLeft (16);
-        run.setBounds (r.removeFromLeft (150));
-    }
-
-    rGrid = { pad, rSeq.getBottom() + 10, kW - 2 * pad, 356 };
-    grid.setBounds (rGrid.reduced (10, 9));
-
-    const int lowY = rGrid.getBottom() + 10, lowH = kH - lowY - pad;
-    rEnv = { pad, lowY, 360, lowH };
-    env.setBounds (rEnv.reduced (6, 4));
-
-    const int x0 = rEnv.getRight() + 10, w = kW - pad - x0;
-    const int h1 = 156, h2 = lowH - h1 - 10;
-    rFilter = { x0, lowY, 214, h1 };
-    rDelay  = { rFilter.getRight() + 10, lowY, 290, h1 };
-    rReverb = { rDelay.getRight() + 10, lowY, x0 + w - rDelay.getRight() - 10, h1 };
-    rMod    = { x0, lowY + h1 + 10, 520, h2 };
-    rOut    = { rMod.getRight() + 10, rMod.getY(), x0 + w - rMod.getRight() - 10, h2 };
-
-    auto inner = [] (juce::Rectangle<int> r) { r = r.reduced (10, 8); r.removeFromTop (20); return r; };
-    auto knobs = [] (juce::Rectangle<int> r, std::initializer_list<Knob*> ks)
-    {
-        const int kw = r.getWidth() / static_cast<int> (ks.size());
-        for (auto* k : ks) k->setBounds (r.removeFromLeft (kw).withHeight (88));
+        const int kw = r.getWidth() / cols, rows = (static_cast<int> (ks.size()) + cols - 1) / cols, kh = r.getHeight() / rows;
+        int i = 0;
+        for (auto* k : ks) { k->setBounds (r.getX() + (i % cols) * kw, r.getY() + (i / cols) * kh, kw, kh); ++i; }
     };
     {
-        auto r = inner (rFilter);
-        filterMode.setBounds (r.removeFromTop (22));
-        r.removeFromTop (6);
-        knobs (r, { &cutoff, &res, &envDepth });
+        // MAIN: three sections, then the drop-downs
+        const int secH = H - 58;
+        secSeq.setBounds (0, 0, 640, secH);
+        secDelay.setBounds (secSeq.getRight() + 10, 0, 300, secH);
+        secReverb.setBounds (secDelay.getRight() + 10, 0, W - secDelay.getRight() - 10, secH);
+        auto inner = [] (const Section& sc) { return sc.getLocalBounds().reduced (14, 6).withTrimmedTop (24); };
+        gridOf (inner (secSeq), { &cutoff, &res, &level, &swing, &output, &glide, &offset, &mix, &pan, &envDepth2 }, 5);
+        gridOf (inner (secDelay), { &dlyLevel, &dlyFb, &dlyLp, &dlyHp, &pingPong }, 3);
+        gridOf (inner (secReverb), { &revLevel, &revSize, &revTone, &revWidth, &revDecay, &revPre }, 3);
+        auto row = juce::Rectangle<int> (0, secH + 10, W, 46);
+        const int cw = (W - 5 * 12) / 6;
+        for (auto* c : { &filterMode, &rate, &length, &run, &dlyTime, &revType }) { c->setBounds (row.removeFromLeft (cw)); row.removeFromLeft (12); }
     }
     {
-        auto r = inner (rDelay);
-        auto top = r.removeFromTop (22);
-        pingPong.setBounds (top.removeFromRight (90));
-        dlyTime.setBounds (top.removeFromLeft (120).withTop (top.getY() - 15));
-        r.removeFromTop (6);
-        knobs (r, { &dlyFb, &dlyHp, &dlyLp, &dlyLevel });
+        // ENV
+        secEnv.setBounds (0, 0, W - 190, H);
+        secEnvDepth.setBounds (W - 180, 0, 180, H);
+        env.setBounds (secEnv.getLocalBounds().reduced (10, 6));
+        envDepth.setBounds (secEnvDepth.getLocalBounds().reduced (20, 0).withTrimmedTop (40).withHeight (110));
     }
     {
-        auto r = inner (rReverb);
-        revType.setBounds (r.removeFromTop (22));
-        r.removeFromTop (6);
-        knobs (r, { &revSize, &revDecay, &revTone, &revLevel });
+        // MOD
+        secMod.setBounds (0, 0, 760, H);
+        secRouting.setBounds (770, 0, W - 770, H);
+        auto r = secMod.getLocalBounds().reduced (16, 8).withTrimmedTop (26);
+        auto tabRow = r.removeFromTop (28);
+        for (auto& t : srcTabs) { t.setBounds (tabRow.removeFromLeft (96)); tabRow.removeFromLeft (6); }
+        r.removeFromTop (16);
+        for (auto& sp : srcPages) sp->setBounds (r);
+        summary.setBounds (secRouting.getLocalBounds().reduced (14, 8).withTrimmedTop (28));
     }
     {
-        auto r = rMod.reduced (10, 8);
-        auto tabs = r.removeFromTop (24).withTrimmedLeft (110);
-        for (auto& t : srcTabs) { t.setBounds (tabs.removeFromLeft (84)); tabs.removeFromLeft (6); }
-        r.removeFromTop (10);
-        for (auto& pg : pages) pg->setBounds (r);
-    }
-    {
-        auto r = inner (rOut);
-        r.removeFromBottom (30);
-        knobs (r, { &pan, &level, &mix, &output });
+        // ADV: same columns as the strips above
+        secAdv.setBounds (0, 0, W, H);
+        grid.setBounds (0, 8, W, H - 12);
+        const int toggleH = 34, barH = (grid.getHeight() - 24 - 6 * 3 - 2 * toggleH - 4) / 3;
+        grid.configure ({ 4, 5, 6, 7, 8 }, StripArea::kGutter, barH, toggleH);
     }
 }
 
 void DubEditor::timerCallback()
 {
     const auto& tel = proc.telemetry();
+    strips.tick();
     const int v = proc.steps.version.load();
-    if (v != shownVersion || tel.running.load()) { shownVersion = v; grid.repaint(); env.repaint(); }
-    if (proc.currentPreset != shownPreset)
-    {
-        shownPreset = proc.currentPreset;
-        preset.setSelectedItemIndex (shownPreset, juce::dontSendNotification);
-    }
-    for (auto* k : { &cutoff, &res, &envDepth, &dlyFb, &dlyLevel, &revSize, &revLevel, &pan, &level, &mix })
+    const bool changed = v != shownVersion;
+    shownVersion = v;
+    if (page == PageAdv && (changed || tel.running.load())) grid.repaint();
+    if (page == PageEnv && (changed || tel.running.load())) env.repaint();
+    if (page == PageMod) { srcPages[static_cast<size_t> (viewSource)]->tick(); summary.repaint(); }
+    if (proc.presetName != shownName) showPresetName();
+    for (auto* k : { &cutoff, &res, &envDepth, &envDepth2, &dlyFb, &dlyLevel, &revSize, &revLevel, &pan, &level, &mix })
         k->updateModulation (tel);
-    pages[static_cast<size_t> (viewSource)]->tick();
     const float s = getWidth() / static_cast<float> (kW);
-    repaint (0, 0, getWidth(), juce::roundToInt (46 * s));
-    repaint (juce::Rectangle<int> (rSeq.getX(), rSeq.getY(), 240, rSeq.getHeight()).transformedBy (juce::AffineTransform::scale (s)));
-    repaint (rOut.transformedBy (juce::AffineTransform::scale (s)).withTrimmedTop (juce::roundToInt ((rOut.getHeight() - 34) * s)));
+    repaint (juce::Rectangle<int> (kW - 160, 0, 160, 58).transformedBy (juce::AffineTransform::scale (s)));
 }
 
 } // namespace dy::dub

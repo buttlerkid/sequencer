@@ -1,5 +1,6 @@
 #pragma once
 #include "../PluginProcessor.h"
+#include "DubLookAndFeel.h"
 
 namespace dy::dub {
 
@@ -8,7 +9,7 @@ namespace dy::dub {
 class StepGrid : public juce::Component, public juce::SettableTooltipClient
 {
 public:
-    explicit StepGrid (DubProcessor& p) : proc (p) {}
+    explicit StepGrid (DubProcessor& p) : proc (p) { visible = allLanes(); }
 
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -24,10 +25,15 @@ public:
 
     enum Kind { Toggle, Bar, Bipolar, Link };
     struct Lane { const char* name; int field; Kind kind; float lo, hi, def; const char* tip; };
-    static const std::vector<Lane>& lanes();
+    static const std::vector<Lane>& allLanes();
+    const std::vector<Lane>& lanes() const { return visible; }
+    // show only these lanes (indices into allLanes), with this label column and row heights
+    void configure (std::vector<int> laneIndices, int labelWidth, int barHeight, int toggleHeight);
 
 private:
-    static constexpr int kLabelW = 62, kHeaderH = 24, kBarH = 34, kToggleH = 20, kGap = 3;
+    std::vector<Lane> visible;
+    int kLabelW = 62, kBarH = 34, kToggleH = 20;
+    static constexpr int kHeaderH = 24, kGap = 3;
     int laneY (int lane) const;
     int laneH (int lane) const;
     juce::Rectangle<float> cell (int lane, int step) const;

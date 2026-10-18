@@ -24,6 +24,7 @@ struct EngineTelemetry
     std::atomic<int>   bank { 0 }, step { -1 }, blockStart { 0 }, blockLen { 1 };
     std::atomic<bool>  played { false }, running { false };
     std::atomic<float> blockPhase { 0.0f };
+    std::atomic<float> stepGain { 0.0f };                        // the playing step's level right now
     std::array<std::atomic<float>, kNumTargets> modNorm {};      // modulated value, 0..1 of the target's range
     std::array<std::atomic<float>, kNumSources> source {};       // LFO 1-3 (-1..1), follower (0..1)
     std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f };
@@ -70,6 +71,8 @@ private:
     Lin gainL, gainR, dly, rev, dryMix, wetMix;
     float cutHz = 20000.0f, q = 0.5f;
     bool filterBypass = true;
+    // glide: the step's values, smoothed from one step to the next
+    float volS = 1.0f, cutS = 10.0f, resS = 0.0f, panS = 0.0f, fdS = 0.0f;
 
     std::array<double, kNumLfos> lfoPhase {};
     std::array<float, kNumLfos> lfoNow {};

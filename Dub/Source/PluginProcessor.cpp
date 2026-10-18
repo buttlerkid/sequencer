@@ -105,6 +105,9 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::swing), "Swing", NormalisableRange<float> (0.0f, 0.5f), 0.0f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (50.0f + v * 50.0f)) + " %"; })));
     l.add (std::make_unique<AudioParameterInt>    (id (PID::length), "Steps", 1, kSteps, kSteps));
+    l.add (std::make_unique<AudioParameterFloat>  (id (PID::glide), "Glide", NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
+    l.add (std::make_unique<AudioParameterFloat>  (id (PID::offset), "Offset", NormalisableRange<float> (-50.0f, 50.0f), 0.0f,
+                                                   AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " ms"; })));
     l.add (std::make_unique<AudioParameterChoice> (id (PID::pattern), "Pattern", patterns, 0));
     l.add (std::make_unique<AudioParameterChoice> (id (PID::filterMode), "Filter Type", StringArray { "Low pass", "Band pass", "High pass" }, 0));
 
@@ -122,13 +125,15 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::dlyHp), "Delay High Pass", NormalisableRange<float> (20.0f, 2000.0f, 0.0f, 0.4f), 300.0f, hz));
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::dlyLp), "Delay Tone", NormalisableRange<float> (800.0f, 20000.0f, 0.0f, 0.4f), 6000.0f, hz));
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::dlyLevel), "Delay Level", NormalisableRange<float> (0.0f, 1.0f), 0.5f, pct));
-    l.add (std::make_unique<AudioParameterBool>   (id (PID::pingPong), "Ping-Pong", true));
+    l.add (std::make_unique<AudioParameterFloat>  (id (PID::pingPong), "Ping-Pong", NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
 
     l.add (std::make_unique<AudioParameterChoice> (id (PID::revType), "Reverb Type", revs, d.revType));
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::revSize), "Reverb Size", NormalisableRange<float> (0.0f, 1.0f), 0.5f, pct));
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::revDecay), "Reverb Decay", NormalisableRange<float> (0.0f, 1.0f), 0.5f, pct));
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::revTone), "Reverb Tone", NormalisableRange<float> (0.0f, 1.0f), 0.5f, pct));
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::revLevel), "Reverb Level", NormalisableRange<float> (0.0f, 1.0f), 0.3f, pct));
+    l.add (std::make_unique<AudioParameterFloat>  (id (PID::revWidth), "Reverb Width", NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
+    l.add (std::make_unique<AudioParameterFloat>  (id (PID::revPre), "Reverb Pre-Delay", NormalisableRange<float> (0.0f, 200.0f, 0.0f, 0.5f), 0.0f, ms));
 
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::mix), "Mix", NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::output), "Output", NormalisableRange<float> (-24.0f, 12.0f), 0.0f,
@@ -160,6 +165,7 @@ DubProcessor::DubProcessor()
     engine.prepare (48000.0);
     // UI tests: DY_DUB_PRESET=<index> starts the plugin on that factory preset
     currentPreset = juce::jlimit (0, presetNames().size() - 1, juce::SystemStats::getEnvironmentVariable ("DY_DUB_PRESET", "0").getIntValue());
+    presetName = presetNames()[currentPreset];
     applyPreset (currentPreset, apvts, steps);
 }
 
@@ -170,10 +176,12 @@ GlobalParams DubProcessor::readParams() const
     GlobalParams p;
     p.runAlways = i (PID::run) == 1;
     p.rate = i (PID::rate); p.swing = f (PID::swing); p.length = i (PID::length); p.pattern = i (PID::pattern);
+    p.glide = f (PID::glide); p.offsetMs = f (PID::offset);
     p.filterMode = i (PID::filterMode);
     for (int t = 1; t < kNumTargets; ++t) p.target[static_cast<size_t> (t)] = f (PID::forTarget (t));
-    p.delayTime = i (PID::dlyTime); p.delayHpHz = f (PID::dlyHp); p.delayLpHz = f (PID::dlyLp); p.pingPong = f (PID::pingPong) > 0.5f;
+    p.delayTime = i (PID::dlyTime); p.delayHpHz = f (PID::dlyHp); p.delayLpHz = f (PID::dlyLp); p.pingPong = f (PID::pingPong);
     p.revType = i (PID::revType); p.revDecay = f (PID::revDecay); p.revTone = f (PID::revTone);
+    p.revWidth = f (PID::revWidth); p.revPreMs = f (PID::revPre);
     p.outputDb = f (PID::output);
     for (int k = 0; k < kNumLfos; ++k)
     {
@@ -240,6 +248,7 @@ void DubProcessor::setCurrentProgram (int i)
 {
     if (i < 0 || i >= getNumPrograms()) return;
     currentPreset = i;
+    presetName = presetNames()[i];
     applyPreset (i, apvts, steps);
 }
 
@@ -249,6 +258,7 @@ void DubProcessor::getStateInformation (juce::MemoryBlock& dest)
     root.setProperty ("version", 1, nullptr);
     root.setProperty ("uiScale", uiScale, nullptr);
     root.setProperty ("preset", currentPreset, nullptr);
+    root.setProperty ("presetName", presetName, nullptr);
     root.addChild (apvts.copyState(), -1, nullptr);
     root.addChild (steps.toTree(), -1, nullptr);
     if (auto xml = root.createXml()) copyXmlToBinary (*xml, dest);
@@ -265,6 +275,7 @@ void DubProcessor::setStateInformation (const void* data, int size)
     if (s.isValid()) steps.fromTree (s);
     uiScale = static_cast<float> (static_cast<double> (root.getProperty ("uiScale", 0.8)));
     currentPreset = static_cast<int> (root.getProperty ("preset", 0));
+    presetName = root.getProperty ("presetName", currentPreset >= 0 ? presetNames()[currentPreset] : juce::String()).toString();
 }
 
 juce::AudioProcessorEditor* DubProcessor::createEditor() { return new DubEditor (*this); }

@@ -1,14 +1,8 @@
 #include "StepGrid.h"
-#include "NodalLookAndFeel.h"
 
 namespace dy::dub {
 
-namespace Colours = dy::nodal::Colours;
-using dy::nodal::displayFont;
-using dy::nodal::bodyFont;
-using dy::nodal::monoFont;
-
-const std::vector<StepGrid::Lane>& StepGrid::lanes()
+const std::vector<StepGrid::Lane>& StepGrid::allLanes()
 {
     using F = StepStore;
     static const std::vector<Lane> l = {
@@ -24,6 +18,14 @@ const std::vector<StepGrid::Lane>& StepGrid::lanes()
         { "CHAIN", F::Chain,  Link,    0, 1, 0, "Join this step to the next: one longer step, one envelope across the block" },
     };
     return l;
+}
+
+void StepGrid::configure (std::vector<int> idx, int labelWidth, int barHeight, int toggleHeight)
+{
+    visible.clear();
+    for (int i : idx) visible.push_back (allLanes()[static_cast<size_t> (i)]);
+    kLabelW = labelWidth; kBarH = barHeight; kToggleH = toggleHeight;
+    repaint();
 }
 
 int StepGrid::laneH (int lane) const

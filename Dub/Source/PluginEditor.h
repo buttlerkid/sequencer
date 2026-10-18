@@ -1,13 +1,13 @@
 #pragma once
 #include "PluginProcessor.h"
-#include "NodalLookAndFeel.h"
+#include "DubLookAndFeel.h"
+#include "StepStrips.h"
 #include "StepGrid.h"
 #include "EnvEditor.h"
 
 namespace dy::dub {
 
 using APVTS = juce::AudioProcessorValueTreeState;
-namespace Colours = dy::nodal::Colours;
 
 // The modulation sources' names and colours (LFO 1-3, follower).
 const char* sourceName (int i);
@@ -25,8 +25,8 @@ public:
     void mouseUp (const juce::MouseEvent& e) override   { if (! e.mods.isPopupMenu()) Slider::mouseUp (e); }
 };
 
-// Rotary + caption + value. Knobs with a modulation target take an LFO or the
-// follower from their right-click menu and show a ring where it has moved them.
+// Caption, knob, value. Knobs with a modulation target take an LFO or the follower
+// from their right-click menu and show a ring where it has moved them.
 class Knob : public juce::Component
 {
 public:
@@ -45,6 +45,7 @@ private:
     float shown = -2.0f;
 };
 
+// Caption above a drop-down (choice and int parameters).
 class Combo : public juce::Component
 {
 public:
@@ -65,31 +66,13 @@ private:
     std::unique_ptr<APVTS::ButtonAttachment> att;
 };
 
-// A horizontal slider with its caption on the left.
-class HSlider : public juce::Component
+// A recessed panel with a bold title, behind a group of controls.
+class Section : public juce::Component
 {
 public:
-    HSlider (APVTS& s, const juce::String& id, juce::String caption);
-    void resized() override;
+    explicit Section (juce::String t = {}) : title (std::move (t)) {}
     void paint (juce::Graphics&) override;
-    juce::Slider slider;
-private:
-    juce::String caption;
-    std::unique_ptr<APVTS::SliderAttachment> att;
-};
-
-// Segmented buttons for a choice parameter.
-class ChoiceRow : public juce::Component
-{
-public:
-    ChoiceRow (APVTS& s, const juce::String& id, juce::StringArray labels = {});
-    void paint (juce::Graphics&) override;
-    void mouseDown (const juce::MouseEvent&) override;
-private:
-    juce::RangedAudioParameter& param;
-    juce::StringArray labels;
-    int current = 0;
-    juce::ParameterAttachment attachment;
+    juce::String title;
 };
 
 // A rolling trace of one modulation source.
@@ -102,7 +85,7 @@ public:
 private:
     const EngineTelemetry& tel;
     int source;
-    std::array<float, 96> hist {};
+    std::array<float, 120> hist {};
     int head = 0;
 };
 
@@ -122,6 +105,18 @@ private:
     std::unique_ptr<Knob> rate, amount, attack, release;
 };
 
+// Every source, where it goes and how far, live.
+class ModSummary : public juce::Component
+{
+public:
+    explicit ModSummary (DubProcessor& p) : proc (p) {}
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    std::function<void (int)> onPick;
+private:
+    DubProcessor& proc;
+};
+
 class DubEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
@@ -129,39 +124,62 @@ public:
     ~DubEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
-    static constexpr int kW = 1180, kH = 830;
+    static constexpr int kW = 1320, kH = 860;
 
 private:
+    enum Page { PageAdv = 0, PageMain, PageEnv, PageMod, kNumPages };
     void timerCallback() override;
     void setBank (int b);
+    void setPage (int p);
     void setSource (int s);
-    void panel (juce::Graphics&, juce::Rectangle<int>, const char* title) const;
+    void refreshPresets();
+    void stepPreset (int delta);
+    void savePreset();
+    void showPresetName();
 
     DubProcessor& proc;
-    dy::nodal::NodalLookAndFeel lnf;
+    DubLookAndFeel lnf;
     juce::TooltipWindow tooltips { this, 600 };
     juce::Component content;
 
-    juce::ComboBox preset;
-    juce::TextButton prevPreset { "<" }, nextPreset { ">" };
-    juce::TextButton bankA { "A" }, bankB { "B" }, copyBank { "Copy A > B" };
-    Combo rate, pattern, run;
-    HSlider length, swing;
-    StepGrid grid;
+    // header
+    juce::ComboBox category, preset;
+    juce::TextButton prevPreset { "<" }, nextPreset { ">" }, save { "Save" }, random { "Random" };
+    juce::TextButton bankA { "A" }, bankB { "B" };
+    Combo pattern;
+    juce::Array<juce::File> userFiles;
+    std::unique_ptr<juce::AlertWindow> saveDialog;
+
+    // strips and the row under them
+    StripArea strips;
+    juce::TextButton rndCut { "Rnd cut" }, rndRes { "Rnd res" }, rndVol { "Rnd vol" }, rndOn { "Rnd on/off" }, copyBank { "Copy A > B" };
+    std::array<juce::TextButton, kNumPages> tabs;
+    std::array<juce::Component, kNumPages> pages;
+
+    // MAIN
+    Section secSeq { "SEQUENCER" }, secDelay { "DELAY" }, secReverb { "REVERB" };
+    Knob cutoff, res, level, swing, output, glide, offset, mix, pan, envDepth2;
+    Knob dlyLevel, dlyFb, dlyLp, dlyHp, pingPong;
+    Knob revLevel, revSize, revTone, revWidth, revDecay, revPre;
+    Combo filterMode, rate, length, run, dlyTime, revType;
+
+    // ENV
+    Section secEnv { "ENVELOPES" }, secEnvDepth { "FILTER ENV" };
     EnvEditor env;
+    Knob envDepth;
 
-    ChoiceRow filterMode, revType;
-    Knob cutoff, res, envDepth;
-    Combo dlyTime;
-    Toggle pingPong;
-    Knob dlyFb, dlyHp, dlyLp, dlyLevel;
-    Knob revSize, revDecay, revTone, revLevel;
-    Knob pan, level, mix, output;
+    // MOD
+    Section secMod { "MODULATION" }, secRouting { "ROUTING" };
     std::array<juce::TextButton, kNumSources> srcTabs;
-    std::vector<std::unique_ptr<SourcePage>> pages;
+    std::vector<std::unique_ptr<SourcePage>> srcPages;
+    ModSummary summary;
 
-    juce::Rectangle<int> rSeq, rGrid, rEnv, rFilter, rDelay, rReverb, rMod, rOut;
-    int viewBank = 0, viewSource = 0, shownVersion = -1, shownPreset = -1;
+    // ADV
+    Section secAdv;
+    StepGrid grid;
+
+    int viewBank = 0, page = PageMain, viewSource = 0, shownVersion = -1;
+    juce::String shownName;
 };
 
 } // namespace dy::dub

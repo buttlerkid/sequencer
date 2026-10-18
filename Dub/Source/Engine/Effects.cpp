@@ -20,13 +20,13 @@ void DubDelay::reset()
     time = timeTarget;
 }
 
-void DubDelay::set (double timeSamples, float feedback, float hpHz, float lpHz, bool pingPong)
+void DubDelay::set (double timeSamples, float feedback, float hpHz, float lpHz, float pingPong)
 {
     timeTarget = clampT (timeSamples, 2.0, sr * 4.0);
     fb = clampT (feedback, 0.0f, 1.0f);
     hpL.setLowpass (hpHz, sr); hpR.a = hpL.a;
     lpL.setLowpass (lpHz, sr); lpR.a = lpL.a;
-    pp = pingPong;
+    pp = clampT (pingPong, 0.0f, 1.0f);
 }
 
 void DubDelay::process (float inL, float inR, float& outL, float& outR)
@@ -37,17 +37,11 @@ void DubDelay::process (float inL, float inR, float& outL, float& outR)
     const float g = fb * 1.02f;
     const float fl = softClip (lpL.lp (hpL.hp (yl)) * g);
     const float fr = softClip (lpR.lp (hpR.hp (yr)) * g);
-    if (pp)
-    {
-        // everything enters on the left and bounces: L -> R -> L
-        l.push ((inL + inR) * 0.5f + fr);
-        r.push (fl);
-    }
-    else
-    {
-        l.push (inL + fl);
-        r.push (inR + fr);
-    }
+    // blend of a stereo echo and a ping-pong, where everything enters on the left and
+    // bounces L -> R -> L; the feedback matrix stays unitary-ish (eigenvalues 1 and 1 - 2p)
+    const float mono = (inL + inR) * 0.5f;
+    l.push ((1.0f - pp) * (inL + fl) + pp * (mono + fr));
+    r.push ((1.0f - pp) * (inR + fr) + pp * fl);
     outL = yl;
     outR = yr;
 }
@@ -76,11 +70,12 @@ void DubReverb::prepare (double sampleRate)
         diff[static_cast<size_t> (i)].resize (static_cast<int> (sr * 0.02) + 8);
         diffLen[static_cast<size_t> (i)] = std::max (1, static_cast<int> (kDiffMs[i] * 0.001 * sr));
     }
-    pre.resize (static_cast<int> (sr * 0.05) + 8);
+    pre.resize (static_cast<int> (sr * 0.3) + 8);
     for (auto& s : springs) s.loop.resize (static_cast<int> (sr * 0.12) + 8);
     lastSize = lastDecay = lastTone = -1.0f;
     set (type, 0.5f, 0.5f, 0.5f);
     for (int i = 0; i < N; ++i) len[static_cast<size_t> (i)] = lenTarget[static_cast<size_t> (i)];
+    preNow = preLen;
     reset();
 }
 
@@ -93,10 +88,12 @@ void DubReverb::reset()
     for (auto& s : springs) { s.loop.clear(); s.apZ.fill (0.0f); s.lp.reset(); s.hp.reset(); }
 }
 
-void DubReverb::set (int t, float size, float decay, float tone)
+void DubReverb::set (int t, float size, float decay, float tone, float w, float preMs)
 {
     t = clampT (t, 0, kNumReverbTypes - 1);
+    width = clampT (w, 0.0f, 1.0f);
     if (t != type) { type = t; lastSize = -1.0f; }
+    if (std::abs (preMs - extraPreMs) > 0.05f) { extraPreMs = preMs; lastSize = -1.0f; }
     if (std::abs (size - lastSize) < 0.002f && std::abs (decay - lastDecay) < 0.002f && std::abs (tone - lastTone) < 0.002f) return;
     lastSize = size; lastDecay = decay; lastTone = tone;
 
@@ -112,7 +109,7 @@ void DubReverb::set (int t, float size, float decay, float tone)
         damp[static_cast<size_t> (i)].setLowpass (dampHz, sr);
     }
     diffG = static_cast<float> (sh.diffusion);
-    preLen = std::max (1, static_cast<int> (sh.preMs * 0.001 * sr));
+    preLen = std::max (1, static_cast<int> ((sh.preMs + clampT (extraPreMs, 0.0f, 250.0f)) * 0.001 * sr));
 
     // spring: two coils of slightly different length; decay sets the loop gain
     const double springT60 = 1.2 * std::pow (3.0, decay * 2.0 - 1.0);
@@ -129,9 +126,13 @@ void DubReverb::set (int t, float size, float decay, float tone)
 
 void DubReverb::process (float inL, float inR, float& outL, float& outR)
 {
+    // pre-delay (glides when changed, like the size)
+    pre.push ((inL + inR) * 0.5f);
+    preNow += 0.0005 * (preLen - preNow);
+    float x = pre.read (preNow);
+
     if (type == RevSpring)
     {
-        const float x = (inL + inR) * 0.5f;
         float o[2];
         for (int k = 0; k < 2; ++k)
         {
@@ -149,14 +150,11 @@ void DubReverb::process (float inL, float inR, float& outL, float& outR)
             s.loop.push (softClip (x * 0.6f + fbk * s.g));
             o[k] = y;
         }
-        outL = o[0] * 0.9f;
-        outR = o[1] * 0.9f;
+        widen (o[0] * 0.9f, o[1] * 0.9f, outL, outR);
         return;
     }
 
-    // pre-delay and input diffusion
-    pre.push ((inL + inR) * 0.5f);
-    float x = pre.read (preLen);
+    // input diffusion
     for (int i = 0; i < 4; ++i)
     {
         auto& d = diff[static_cast<size_t> (i)];
@@ -182,8 +180,14 @@ void DubReverb::process (float inL, float inR, float& outL, float& outR)
         const float in = (i & 1) ? x : -x;
         lines[static_cast<size_t> (i)].push (y[static_cast<size_t> (i)] - h + in * 0.35f);
     }
-    outL = (y[0] - y[2] + y[4] - y[6]) * 0.6f;
-    outR = (y[1] - y[3] + y[5] - y[7]) * 0.6f;
+    widen ((y[0] - y[2] + y[4] - y[6]) * 0.6f, (y[1] - y[3] + y[5] - y[7]) * 0.6f, outL, outR);
+}
+
+void DubReverb::widen (float l, float r, float& outL, float& outR) const
+{
+    const float mid = (l + r) * 0.5f, side = (l - r) * 0.5f * width;
+    outL = mid + side;
+    outR = mid - side;
 }
 
 } // namespace dy::dub

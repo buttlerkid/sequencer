@@ -1,4 +1,4 @@
-set(DY_DUB_VERSION 0.1.0)
+set(DY_DUB_VERSION 0.2.0)
 
 set(DUB_ENGINE_SOURCES
     Source/Engine/DubEngine.cpp
@@ -32,9 +32,11 @@ if(DY_BUILD_PLUGIN)
         Source/Presets.cpp
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
+        Source/UI/DubLookAndFeel.cpp
+        Source/UI/StepStrips.cpp
         Source/UI/StepGrid.cpp
         Source/UI/EnvEditor.cpp
-        ../Nodal/Source/UI/NodalLookAndFeel.cpp)     # the suite's brass-on-graphite look
+        ../Nodal/Source/UI/NodalLookAndFeel.cpp)     # the suite's fonts
 
     target_include_directories(DYDub PRIVATE Source Source/UI ../Nodal/Source/UI)
     target_link_libraries(DYDub PRIVATE juce::juce_audio_utils)

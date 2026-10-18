@@ -177,7 +177,7 @@ int main()
         DubEngine e; e.prepare (kSr);
         auto p = dryParams();
         p.target[ModDelayLevel] = 1.0f; p.target[ModDelayFb] = 0.0f; p.delayTime = 3;       // 1/8 = 12000 samples
-        p.pingPong = false; p.delayHpHz = 5.0f; p.delayLpHz = 20000.0f;
+        p.pingPong = 0.0f; p.delayHpHz = 5.0f; p.delayLpHz = 20000.0f;
         e.setParams (p);
         Banks banks {};
         for (auto& st : banks[0]) { st.venv = { 0, 0, 1, 0 }; st.on = false; }
@@ -203,7 +203,7 @@ int main()
         DubEngine e; e.prepare (kSr);
         auto p = dryParams();
         p.target[ModDelayLevel] = 1.0f; p.target[ModDelayFb] = 0.8f; p.delayTime = 3;
-        p.pingPong = true; p.delayHpHz = 5.0f; p.delayLpHz = 20000.0f;
+        p.pingPong = 1.0f; p.delayHpHz = 5.0f; p.delayLpHz = 20000.0f;
         e.setParams (p);
         Banks banks {};
         for (auto& st : banks[0]) { st.venv = { 0, 0, 1, 0 }; st.on = false; }
@@ -265,6 +265,60 @@ int main()
         run (f, L, R, 0.5, 0.5f);
         // input at -6 dB -> follower 0.9 -> level norm 0.667 - 0.54 = 0.127 -> x 1.5 = 0.19
         CHECK (rms (L, 10000, 20000) < 0.15f);
+    }
+
+    std::puts ("Glide and offset");
+    {
+        auto alternating = [] (Banks& banks)
+        {
+            for (int s = 0; s < kSteps; ++s) { auto& st = banks[0][static_cast<size_t> (s)]; st.venv = { 0, 0, 1, 0 }; st.vol = s % 2 ? 0.2f : 1.0f; }
+        };
+        Banks banks {};
+        alternating (banks);
+        DubEngine e; e.prepare (kSr);
+        auto p = dryParams();
+        e.setParams (p); e.setBanks (banks);
+        std::vector<float> L, R;
+        run (e, L, R, 0.5, 1.0f);
+        CHECK_NEAR (L[6000 + 200], 0.2f, 0.02f);                    // no glide: the second step drops at once
+        p.glide = 1.0f;
+        DubEngine f; f.prepare (kSr); f.setParams (p); f.setBanks (banks);
+        run (f, L, R, 0.5, 1.0f);
+        CHECK (L[6000 + 200] > 0.8f);                               // glide: still close to the first step's level
+        CHECK (L[6000 + 5500] < 0.45f);                             // ... and most of the way there by the end
+
+        p.glide = 0.0f; p.offsetMs = 20.0f;                         // 20 ms = 960 samples later
+        DubEngine o; o.prepare (kSr); o.setParams (p); o.setBanks (banks);
+        run (o, L, R, 0.5, 1.0f);
+        CHECK_NEAR (L[6000 + 500], 1.0f, 0.02f);                    // step 1 still playing past 6000
+        CHECK_NEAR (L[6000 + 1200], 0.2f, 0.02f);
+    }
+
+    std::puts ("Reverb width and pre-delay");
+    {
+        auto burst = [] (DubEngine& e, std::vector<float>& L, std::vector<float>& R)
+        {
+            const int total = static_cast<int> (kSr * 1.0);
+            L.assign (static_cast<size_t> (total), 0.0f); R = L;
+            for (int i = 0; i < 400; ++i) L[static_cast<size_t> (i)] = R[static_cast<size_t> (i)] = (i % 40 < 20) ? 0.5f : -0.5f;
+            for (int pos = 0; pos < total; pos += 256) e.process (L.data() + pos, R.data() + pos, std::min (256, total - pos), pos * kBpm / 60.0 / kSr, kBpm, true);
+        };
+        auto p = dryParams();
+        p.target[ModRevLevel] = 1.0f; p.revType = RevHall; p.revWidth = 0.0f;
+        Banks banks {};
+        for (auto& st : banks[0]) { st.venv = { 0, 0, 1, 0 }; st.on = false; }
+        banks[0][0].on = true; banks[0][0].rev = true;
+        DubEngine e; e.prepare (kSr); e.setParams (p); e.setBanks (banks);
+        std::vector<float> L, R;
+        burst (e, L, R);
+        float diff = 0; for (size_t i = 0; i < L.size(); ++i) diff = std::max (diff, std::abs (L[i] - R[i]));
+        CHECK (diff < 1e-5f);                                       // width 0: mono
+
+        p.revWidth = 1.0f; p.revPreMs = 150.0f;                     // 22 ms of the hall + 150 ms
+        DubEngine f; f.prepare (kSr); f.setParams (p); f.setBanks (banks);
+        burst (f, L, R);
+        CHECK (rms (L, 1000, 7000) < 1e-4f);                        // nothing before the pre-delay
+        CHECK (rms (L, 9000, 20000) > 0.002f);
     }
 
     std::puts ("Stopped: the input passes through");

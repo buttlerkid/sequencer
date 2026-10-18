@@ -1,12 +1,7 @@
 #include "EnvEditor.h"
-#include "NodalLookAndFeel.h"
 
 namespace dy::dub {
 
-namespace Colours = dy::nodal::Colours;
-using dy::nodal::displayFont;
-using dy::nodal::bodyFont;
-using dy::nodal::monoFont;
 
 // field offsets from VRise / FRise
 enum { kRise = 0, kFall = 1, kSus = 2, kCurve = 3 };
@@ -36,9 +31,12 @@ int EnvEditor::blockLen() const
     return e - blockStart() + 1;
 }
 
+bool EnvEditor::wide() const { return getWidth() > 2 * getHeight(); }
+
 void EnvEditor::resized()
 {
     auto r = getLocalBounds().removeFromBottom (26);
+    if (wide()) r = r.removeFromRight (380);
     const int w = (r.getWidth() - 8) / 2;
     allSteps.setBounds (r.removeFromLeft (w));
     r.removeFromLeft (8);
@@ -48,8 +46,18 @@ void EnvEditor::resized()
 juce::Rectangle<float> EnvEditor::graph (int which) const
 {
     auto r = getLocalBounds().toFloat().withTrimmedTop (22.0f).withTrimmedBottom (34.0f);
-    const float h = (r.getHeight() - 22.0f) / 2.0f;
-    auto g = which == 0 ? r.removeFromTop (h) : r.withTrimmedTop (h + 22.0f);
+    juce::Rectangle<float> g;
+    if (wide())
+    {
+        // side by side
+        const float w = (r.getWidth() - 20.0f) / 2.0f;
+        g = which == 0 ? r.withWidth (w) : r.withTrimmedLeft (w + 20.0f);
+    }
+    else
+    {
+        const float h = (r.getHeight() - 22.0f) / 2.0f;
+        g = which == 0 ? r.removeFromTop (h) : r.withTrimmedTop (h + 22.0f);
+    }
     return g.reduced (8.0f, 14.0f).withTrimmedTop (12.0f);
 }
 
@@ -65,9 +73,6 @@ juce::Point<float> EnvEditor::node (int which, int n) const
 void EnvEditor::paint (juce::Graphics& g)
 {
     const int s = blockStart(), n = blockLen();
-    g.setColour (Colours::dim);
-    g.setFont (displayFont (10.5f));
-    g.drawText ("ENVELOPE", 12, 6, 120, 14, juce::Justification::centredLeft);
     g.setColour (Colours::brass);
     g.setFont (monoFont (11.0f));
     const juce::String which = "bank " + juce::String (bank == 0 ? "A" : "B") + "  step " + juce::String (s + 1)
@@ -81,8 +86,7 @@ void EnvEditor::paint (juce::Graphics& g)
     {
         auto r = graph (w);
         auto frame = r.expanded (8.0f, 12.0f).withTrimmedTop (-12.0f);
-        g.setColour (Colours::scopeBg);
-        g.fillRoundedRectangle (frame, 6.0f);
+        drawInset (g, frame, 6.0f);
         g.setColour (Colours::dim);
         g.setFont (displayFont (9.0f));
         g.drawText (w == 0 ? "VOLUME" : "FILTER", frame.reduced (8.0f, 2.0f).removeFromTop (12.0f), juce::Justification::centredLeft);

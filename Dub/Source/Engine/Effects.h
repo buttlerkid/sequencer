@@ -85,7 +85,7 @@ public:
     void prepare (double sampleRate);
     void reset();
     // time in samples, feedback 0..1
-    void set (double timeSamples, float feedback, float hpHz, float lpHz, bool pingPong);
+    void set (double timeSamples, float feedback, float hpHz, float lpHz, float pingPong);
     void process (float inL, float inR, float& outL, float& outR);
 
 private:
@@ -93,7 +93,7 @@ private:
     DelayLine l, r;
     double time = 12000.0, timeTarget = 12000.0, glide = 0.0005;
     float fb = 0.4f;
-    bool pp = true;
+    float pp = 1.0f;
     OnePole hpL, hpR, lpL, lpR;
 };
 
@@ -104,11 +104,12 @@ class DubReverb
 public:
     void prepare (double sampleRate);
     void reset();
-    // size 0..1, decay 0..1, tone 0..1 (dark .. bright)
-    void set (int type, float size, float decay, float tone);
+    // size 0..1, decay 0..1, tone 0..1 (dark .. bright), width 0..1, extra pre-delay in ms
+    void set (int type, float size, float decay, float tone, float width = 1.0f, float preMs = 0.0f);
     void process (float inL, float inR, float& outL, float& outR);
 
 private:
+    void widen (float l, float r, float& outL, float& outR) const;
     static constexpr int N = 8;
     double sr = 48000.0;
     int type = RevPlate;
@@ -123,6 +124,8 @@ private:
     float diffG = 0.6f;
     DelayLine pre;
     int preLen = 1;
+    double preNow = 1.0;
+    float width = 1.0f, extraPreMs = -1.0f;
 
     // spring
     struct Spring

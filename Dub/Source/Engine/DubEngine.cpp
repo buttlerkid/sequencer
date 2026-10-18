@@ -16,6 +16,7 @@ void DubEngine::reset()
     for (auto& f : filt) f.reset();
     delay.reset();
     reverb.reset();
+    volS = 1.0f; cutS = 10.0f; resS = panS = fdS = 0.0f;
     gainL.snap (1.0f); gainR.snap (1.0f); dly.snap (0.0f); rev.snap (0.0f); dryMix.snap (0.0f); wetMix.snap (1.0f);
     lfoPhase.fill (0.0);
     follow = 0.0f;
@@ -121,13 +122,24 @@ void DubEngine::control (double ppqEnd, double bpm, int n, bool running)
     float dSend = 0.0f, rSend = 0.0f;
     if (running)
     {
-        const auto p = locate (ppqEnd);
+        const auto p = locate (ppqEnd - params.offsetMs * bpm / 60000.0);
         const auto& st = banks[static_cast<size_t> (p.bank)][static_cast<size_t> (p.blockStart)];
         const bool plays = blockPlays (st, p.blockAbs, p.bank);
-        g = plays ? st.vol * st.venv.at (p.blockPhase) * mod[ModLevel] : 0.0f;
-        pan += st.pan;
-        cutOct = st.cut * 10.0f + mod[ModCutoff] + st.fdepth * mod[ModEnvDepth] * st.fenv.at (p.blockPhase);
-        res += st.res;
+
+        // glide: each value slides towards the step's own over part of a step
+        const double stepSamples = kRates[clampT (params.rate, 0, kNumRates - 1)].beats * 60.0 / std::max (20.0, bpm) * sr;
+        const double tau = params.glide * stepSamples * 0.35;
+        const float a = tau < 1.0 ? 1.0f : static_cast<float> (1.0 - std::exp (-n / tau));
+        volS += a * (st.vol - volS);
+        cutS += a * (st.cut * 10.0f - cutS);
+        resS += a * (st.res - resS);
+        panS += a * (st.pan - panS);
+        fdS  += a * (st.fdepth - fdS);
+
+        g = plays ? volS * st.venv.at (p.blockPhase) * mod[ModLevel] : 0.0f;
+        pan += panS;
+        cutOct = cutS + mod[ModCutoff] + fdS * mod[ModEnvDepth] * st.fenv.at (p.blockPhase);
+        res += resS;
         dSend = plays && st.dly ? 1.0f : 0.0f;
         rSend = plays && st.rev ? 1.0f : 0.0f;
         telemetry.bank.store (p.bank);
@@ -136,6 +148,7 @@ void DubEngine::control (double ppqEnd, double bpm, int n, bool running)
         telemetry.blockLen.store (p.blockLen);
         telemetry.blockPhase.store (p.blockPhase);
         telemetry.played.store (plays);
+        telemetry.stepGain.store (g);
     }
     else
     {
@@ -164,7 +177,7 @@ void DubEngine::control (double ppqEnd, double bpm, int n, bool running)
 
     const double delayBeats = kDelayTimes[clampT (params.delayTime, 0, kNumDelayTimes - 1)].beats;
     delay.set (delayBeats * 60.0 / std::max (20.0, bpm) * sr, mod[ModDelayFb], params.delayHpHz, params.delayLpHz, params.pingPong);
-    reverb.set (params.revType, mod[ModRevSize], params.revDecay, params.revTone);
+    reverb.set (params.revType, mod[ModRevSize], params.revDecay, params.revTone, params.revWidth, params.revPreMs);
 }
 
 void DubEngine::process (float* L, float* R, int n, double ppq, double bpm, bool running)

@@ -4,32 +4,49 @@ A step sequencer for audio, as a VST3 effect. Every step has its own level, filt
 pan, chance, envelopes and delay / reverb sends, so a held chord turns into a
 rhythm and a drum loop turns into something else.
 
-![DY Dub](../docs/dub-v0.1.png)
+![DY Dub](../docs/dub-v0.2.png)
 
 ## Quick start
 
 1. Drop **DY Dub** on an audio track (or after an instrument) and press play.
 2. Pick a preset at the top: *Dub Chords* on a held minor chord, *Chopped Drums* on a
    break, *Four-Bar Sweep* on a pad, *Echo Throws* on anything.
-3. Draw in the lanes, click a step number to shape its envelopes.
+3. Turn the step knobs, click a strip to shape its envelopes on the **ENV** page.
+
+## The console
+
+- **Header**: preset browser (All / Factory / User, `<` `>`), **SAVE** (your own
+  presets, kept in `%APPDATA%\DY\DY Dub\Presets`), **RANDOM** (a new pattern for the
+  bank on view), bank keys **A / B** and the **Pattern**.
+- **16 channel strips**: per step a **CUT** and **RES** knob, a **VOL** fader with a
+  meter that lights while the step plays, and an **ON** key. The LED above the
+  number is the playhead; click a strip to select it (white frame). The chain
+  links between strips join steps; joined strips grey out, the first one plays.
+- **RND CUT / RES / VOL / ON-OFF** roll one row for the bank on view;
+  **COPY A > B** copies the bank.
+- Pages: **ADV** (pan, chance, filter-envelope depth, delay and reverb sends, in the
+  strips' columns), **MAIN** (sequencer, delay, reverb), **ENV** (the selected
+  step's envelopes), **MOD** (LFOs, follower and where they go).
 
 ## The sequencer
 
 | Control | What it does |
 |---|---|
-| **Bank A / B** | 16 steps each. The buttons pick which bank you see; a dot marks the one playing |
+| **Bank A / B** | 16 steps each. The keys pick which bank you see; the strip gutter shows which one plays |
 | **Pattern** | Which bank plays on each pass: A, B, AB, AAB, ABB, AABB, AAAB, ABBB, AAAAAAAB |
 | **Seq rate** | Length of one step, 1/32 to 1 bar (1/16 T, 1/8 T, 1/4 T too) |
 | **Steps** | Steps per pass (1-16); shorter than 16 runs against the bar |
 | **Swing** | Delays every second step, 50 % (straight) to 75 % |
+| **Glide** | Step values (level, cutoff, resonance, pan) slide into each other instead of jumping |
+| **Offset** | Moves the steps up to 50 ms later or earlier against the beat |
 | **Run** | *Always* keeps sequencing on its own clock while the song is stopped; *With transport* passes the input dry until you press play |
 
 The sequencer follows the song position, so the same bar always plays the same
 step, and probability decisions repeat exactly every time you play the song.
 
-## Lanes (per step)
+## Per step
 
-| Lane | |
+| Control | |
 |---|---|
 | **ON** | Off steps leave a gap |
 | **VOL** | Level of the step |
@@ -40,14 +57,14 @@ step, and probability decisions repeat exactly every time you play the song.
 | **DLY / REV** | Send this step into the delay / the reverb: keep the pattern dry and throw one hit into the echo |
 | **CHAIN** | Joins a step to the next: one longer step whose envelope runs across the whole block. The first step's values play |
 
-Drag across bars to draw, click toggles (drag to paint the same state),
+Knobs and faders: drag, double-click to reset; hover shows the value. On the ADV
+page drag across bars to draw, click toggles (drag to paint the same state),
 double-click a bar to reset it. Right-click a lane: set every step to one value,
-reset, randomise, invert, or copy the lane to the other bank. **Copy A > B**
-copies the whole bank.
+reset, randomise, invert, or copy the lane to the other bank.
 
 ## Envelopes
 
-Click a step number. The envelope panel shows the **volume** and **filter**
+Click a strip, then open **ENV**. It shows the **volume** and **filter**
 envelopes of that step (or of its chained block): rise, sustain, fall, in
 percent of the step so the shape holds at any tempo.
 
@@ -60,9 +77,13 @@ percent of the step so the shape holds at any tempo.
 
 Ping-pong delay locked to the tempo (1/16 to 1/2, dotted and triplet), with a high
 pass and a tone low pass inside the feedback, so repeats thin out instead of piling
-up. Feedback at 100 % saturates instead of exploding; changing the time glides like
-tape. Five reverbs: **Room, Plate, Hall, Spring, Chamber**, with size, decay, tone and
-level. Only steps with DLY / REV on feed them; the tails ring through the gaps.
+up. **Ping-pong** blends from a stereo echo (0 %) to repeats bouncing left - right
+(100 %). Feedback at 100 % saturates instead of exploding; changing the time glides
+like tape. Five reverbs: **Room, Plate, Hall, Spring, Chamber**, with size, decay,
+damp, width, pre-delay and mix. Only steps with DLY / REV on feed them; the tails ring through the gaps.
+
+**Volume** is the level of the sequenced signal, **Dry/Wet** blends it with the input,
+**Output** is the final gain, **Pan** (and the strips' pan) places it.
 
 ## Modulation
 
@@ -75,12 +96,7 @@ feedback / level, reverb size / level, pan, level, mix) and pick a source. A rin
 around the knob shows where the modulation has taken it right now. Each source has
 one target; set the amount on its page.
 
-## Output
-
-Pan (auto-pan: LFO on it), level of the sequenced signal, dry / wet mix, output
-gain, and input / output meters.
-
 ## Not yet
 
 - modulating the per-step controls inside the grid
-- per-bank step counts, user preset saving (the host's preset system works)
+- per-bank step counts

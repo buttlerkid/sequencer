@@ -1,5 +1,6 @@
 #pragma once
 #include "../PluginProcessor.h"
+#include "DubLookAndFeel.h"
 
 namespace dy::dub {
 
@@ -22,6 +23,7 @@ public:
 
 private:
     enum DragKind { DragNone, DragRise, DragSus, DragCurve };
+    bool wide() const;
     int blockStart() const;
     int blockLen() const;
     juce::Rectangle<float> graph (int which) const;          // 0 volume, 1 filter

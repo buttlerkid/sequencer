@@ -7,6 +7,7 @@ namespace dy::dub {
 namespace PID
 {
     inline const juce::String run = "run", rate = "rate", swing = "swing", length = "length", pattern = "pattern",
+        glide = "glide", offset = "offset", revWidth = "revWidth", revPre = "revPre",
         filterMode = "filterMode", cutoff = "cutoff", res = "res", level = "level", pan = "pan", envDepth = "envDepth",
         dlyTime = "dlyTime", dlyFb = "dlyFb", dlyHp = "dlyHp", dlyLp = "dlyLp", dlyLevel = "dlyLevel", pingPong = "pingPong",
         revType = "revType", revSize = "revSize", revDecay = "revDecay", revTone = "revTone", revLevel = "revLevel",
@@ -67,7 +68,7 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 8.0; }
     int getNumPrograms() override;
-    int getCurrentProgram() override { return currentPreset; }
+    int getCurrentProgram() override { return juce::jmax (0, currentPreset); }
     void setCurrentProgram (int) override;
     const juce::String getProgramName (int) override;
     void changeProgramName (int, const juce::String&) override {}
@@ -81,7 +82,8 @@ public:
     std::atomic<double> shownBpm { 120.0 };
     std::atomic<bool> hostSynced { false };
     float uiScale = 0.8f;
-    int currentPreset = 0;
+    int currentPreset = 0;                   // factory preset index, or -1 for a user preset / edited sound
+    juce::String presetName { "Init" };
 
 private:
     DubEngine engine;
@@ -91,8 +93,16 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DubProcessor)
 };
 
-// Factory presets (Presets.cpp).
+// Factory presets, user presets and randomising (Presets.cpp).
 juce::StringArray presetNames();
 void applyPreset (int index, juce::AudioProcessorValueTreeState&, StepStore&);
+
+juce::File userPresetFolder();
+juce::Array<juce::File> userPresets();
+bool saveUserPreset (DubProcessor&, const juce::String& name);
+bool loadUserPreset (DubProcessor&, const juce::File&);
+
+enum RandomWhat { RandomCut = 1, RandomRes = 2, RandomVol = 4, RandomOn = 8, RandomAll = 0xff };
+void randomiseSteps (StepStore&, int bank, int what);
 
 } // namespace dy::dub

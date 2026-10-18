@@ -194,4 +194,76 @@ void applyPreset (int index, juce::AudioProcessorValueTreeState& state, StepStor
             steps.setStep (k, s, b[static_cast<size_t> (k)][static_cast<size_t> (s)]);
 }
 
+// ------------------------------------------------------------------ user presets
+juce::File userPresetFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("DY").getChildFile ("DY Dub").getChildFile ("Presets");
+}
+
+juce::Array<juce::File> userPresets()
+{
+    auto files = userPresetFolder().findChildFiles (juce::File::findFiles, false, "*.dydub");
+    std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
+               { return a.getFileNameWithoutExtension().compareIgnoreCase (b.getFileNameWithoutExtension()) < 0; });
+    return files;
+}
+
+bool saveUserPreset (DubProcessor& proc, const juce::String& name)
+{
+    const auto clean = juce::File::createLegalFileName (name.trim());
+    if (clean.isEmpty()) return false;
+    auto folder = userPresetFolder();
+    if (! folder.createDirectory()) return false;
+    juce::ValueTree root ("DYDubPreset");
+    root.setProperty ("name", name.trim(), nullptr);
+    root.addChild (proc.apvts.copyState(), -1, nullptr);
+    root.addChild (proc.steps.toTree(), -1, nullptr);
+    auto xml = root.createXml();
+    if (xml == nullptr || ! xml->writeTo (folder.getChildFile (clean + ".dydub"))) return false;
+    proc.currentPreset = -1;
+    proc.presetName = name.trim();
+    return true;
+}
+
+bool loadUserPreset (DubProcessor& proc, const juce::File& file)
+{
+    auto xml = juce::XmlDocument::parse (file);
+    if (xml == nullptr) return false;
+    auto root = juce::ValueTree::fromXml (*xml);
+    auto p = root.getChildWithName (proc.apvts.state.getType());
+    auto s = root.getChildWithName ("Steps");
+    if (! p.isValid() || ! s.isValid()) return false;
+    proc.apvts.replaceState (p);
+    proc.steps.fromTree (s);
+    proc.currentPreset = -1;
+    proc.presetName = root.getProperty ("name", file.getFileNameWithoutExtension()).toString();
+    return true;
+}
+
+// ------------------------------------------------------------------ random
+void randomiseSteps (StepStore& st, int bank, int what)
+{
+    juce::Random r;
+    for (int s = 0; s < kSteps; ++s)
+    {
+        if (what & RandomCut) st.set (bank, s, StepStore::Cut, 0.3f + 0.7f * std::sqrt (r.nextFloat()));
+        if (what & RandomRes) st.set (bank, s, StepStore::Res, 0.7f * r.nextFloat() * r.nextFloat());
+        if (what & RandomVol) st.set (bank, s, StepStore::Vol, 0.35f + 0.65f * r.nextFloat());
+        if (what & RandomOn)  st.set (bank, s, StepStore::On, (s == 0 || r.nextFloat() < 0.68f) ? 1.0f : 0.0f);
+        if (what == RandomAll)
+        {
+            // everything else, sparingly: a few sends, a little pan, the odd chain and filter sweep
+            st.set (bank, s, StepStore::Pan, r.nextFloat() < 0.4f ? r.nextFloat() * 1.2f - 0.6f : 0.0f);
+            st.set (bank, s, StepStore::Prob, r.nextFloat() < 0.25f ? 0.6f + 0.35f * r.nextFloat() : 1.0f);
+            st.set (bank, s, StepStore::Dly, r.nextFloat() < 0.15f ? 1.0f : 0.0f);
+            st.set (bank, s, StepStore::Rev, r.nextFloat() < 0.2f ? 1.0f : 0.0f);
+            st.set (bank, s, StepStore::Chain, s < kSteps - 1 && r.nextFloat() < 0.12f ? 1.0f : 0.0f);
+            st.set (bank, s, StepStore::FDepth, r.nextFloat() < 0.3f ? r.nextFloat() * 6.0f - 2.0f : 0.0f);
+            st.set (bank, s, StepStore::VRise, 0.002f + 0.05f * r.nextFloat() * r.nextFloat());
+            st.set (bank, s, StepStore::VFall, 0.05f + 0.6f * r.nextFloat());
+            st.set (bank, s, StepStore::VSus, 0.4f + 0.6f * r.nextFloat());
+        }
+    }
+}
+
 } // namespace dy::dub
