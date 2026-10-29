@@ -43,8 +43,7 @@ int main (int argc, char** argv)
     const auto t0 = std::chrono::steady_clock::now();
     for (int i = 0; i < repeat; ++i) faces = t.track (f);
     const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count() / repeat;
-    if (faces.empty()) { std::printf ("no face (%s)\n", t.error().c_str()); return 1; }
-    std::printf ("%d face(s)  %.1f ms/frame\n", (int) faces.size(), ms);
+    std::printf ("%d face(s)  %.1f ms/frame  %s\n", (int) faces.size(), ms, t.error().c_str());
     for (const auto& r : faces)
     {
         const auto s = measure (r.points.data(), (float) w, (float) h);
@@ -54,5 +53,25 @@ int main (int argc, char** argv)
         std::printf ("  gap %.3f width %.3f lift %.3f brow %.3f roll %.2f head %.2f,%.2f\n", s.gap, s.width, s.lift, s.brow, s.roll, s.headX, s.headY);
         std::printf ("  open %.2f width %.2f smile %.2f pucker %.2f brows %.2f tilt %.2f\n", v[Open], v[Width], v[Smile], v[Pucker], v[Brows], v[Tilt]);
     }
-    return 0;
+
+    auto hdet = readAll (dir + "/hand_detector.onnx"), hlm = readAll (dir + "/hand_landmarks_detector.onnx");
+    HandTracker ht;
+    if (! ht.load (std::wstring (dll.begin(), dll.end()), hdet.data(), hdet.size(), hlm.data(), hlm.size()))
+    {
+        std::printf ("hand load failed: %s\n", ht.error().c_str());
+        return 1;
+    }
+    std::vector<HandResult> hands;
+    const auto t1 = std::chrono::steady_clock::now();
+    for (int i = 0; i < repeat; ++i) hands = ht.track (f);
+    const double hms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t1).count() / repeat;
+    std::printf ("%d hand(s)  %.1f ms/frame  %s\n", (int) hands.size(), hms, ht.error().c_str());
+    for (const auto& r : hands)
+    {
+        const auto s = measureHand (r.points.data(), (float) w, (float) h);
+        std::printf ("hand %d (%.2f)  wrist (%.0f,%.0f) index tip (%.0f,%.0f)  pinch %.2f spread %.2f at %.2f,%.2f\n", r.id + 1, r.score,
+                     r.points[HandMesh::wrist].x, r.points[HandMesh::wrist].y, r.points[HandMesh::indexTip].x, r.points[HandMesh::indexTip].y,
+                     s.pinch, s.spread, s.x, s.y);
+    }
+    return faces.empty() && hands.empty() ? 1 : 0;
 }

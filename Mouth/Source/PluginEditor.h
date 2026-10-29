@@ -40,7 +40,7 @@ private:
     std::unique_ptr<APVTS::ButtonAttachment> att;
 };
 
-// The camera picture with the lips drawn over it.
+// The camera picture with the lips, hands and circle trails drawn over it.
 class CameraView : public juce::Component
 {
 public:
@@ -50,17 +50,33 @@ private:
     MouthProcessor& proc;
 };
 
-// Every shape of every face as bars, and the note threshold on Open.
+// A grid of bars: some shapes (rows) of some faces or hands (columns), and the note
+// threshold on Open.
 class ShapeMeters : public juce::Component
 {
 public:
-    explicit ShapeMeters (MouthProcessor& p) : proc (p) {}
+    ShapeMeters (MouthProcessor& p, int firstSource, int sources, int firstWho, int whos)
+        : proc (p), source0 (firstSource), nSources (sources), who0 (firstWho), nWho (whos) {}
     void paint (juce::Graphics&) override;
 private:
     MouthProcessor& proc;
+    int source0, nSources, who0, nWho;
 };
 
-// One output: which shape, where it goes, how it is shaped.
+// The take: drag it into Live as a MIDI clip.
+class TakeDrag : public juce::Component
+{
+public:
+    explicit TakeDrag (MouthProcessor& p) : proc (p) { setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
+    void paint (juce::Graphics&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override { dragging = false; }
+private:
+    MouthProcessor& proc;
+    bool dragging = false;
+};
+
+// One output: whose, which shape, where it goes, how it is shaped.
 class OutputStrip : public juce::Component
 {
 public:
@@ -71,11 +87,11 @@ public:
 private:
     MouthProcessor& proc;
     int index;
-    Combo source, dest;
+    Combo who, source, dest;
     Knob cc, smooth, lo, hi;
     Toggle invert;
-    Combo face;
     float shown = -1.0f;
+    int shownWho = -1;
 };
 
 class MouthEditor : public juce::AudioProcessorEditor, private juce::Timer
@@ -85,7 +101,7 @@ public:
     ~MouthEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
-    static constexpr int kW = 1040, kH = 802;
+    static constexpr int kW = 1250, kH = 802;
 
 private:
     void timerCallback() override;
@@ -94,14 +110,15 @@ private:
     dy::nodal::NodalLookAndFeel lnf;
     juce::Component content;
     CameraView camera;
-    ShapeMeters meters;
+    ShapeMeters faceMeters, handMeters;
     juce::ComboBox cameraBox;
-    juce::TextButton neutral { "Neutral" }, mirror { "Mirror" };
-    Knob note, threshold, velocity, level;
-    Toggle trigger, speed, preview, faceChannels;
-    Combo channel, pitchMode, chord, scale, faces;
+    juce::TextButton neutral { "Neutral" }, mirror { "Mirror" }, record { "Record" };
+    Knob note, threshold, velocity, level, circleNote, circleLength;
+    Toggle trigger, speed, preview, faceChannels, circleNotes;
+    Combo channel, pitchMode, chord, scale, faces, hands;
+    TakeDrag take;
     std::array<std::unique_ptr<OutputStrip>, 4> strips;
-    juce::Rectangle<int> panels[4];
+    juce::Rectangle<int> panels[6];
     juce::String headerText;
     int ticks = 0;
 };

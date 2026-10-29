@@ -15,11 +15,18 @@ const std::vector<NamedSet> kScales {
     { "Chromatic", { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 } },
 };
 
+namespace
+{
+    Point sub (Point a, Point b) { return { a.x - b.x, a.y - b.y }; }
+    float dot (Point a, Point b) { return a.x * b.x + a.y * b.y; }
+    float dist (Point a, Point b) { return std::sqrt (dot (sub (a, b), sub (a, b))); }
+    float unit (float v) { return std::clamp (v, 0.0f, 1.0f); }
+    constexpr double kTwoPi = 6.283185307179586;
+}
+
+// ------------------------------------------------------------------ faces
 MouthShape measure (const Point* p, float frameW, float frameH)
 {
-    auto sub = [] (Point a, Point b) { return Point { a.x - b.x, a.y - b.y }; };
-    auto dot = [] (Point a, Point b) { return a.x * b.x + a.y * b.y; };
-
     const Point eyes = sub (p[Mesh::eyeL], p[Mesh::eyeR]);
     const float iod = std::sqrt (dot (eyes, eyes));
     if (iod < 1.0e-6f) return {};
@@ -36,27 +43,113 @@ MouthShape measure (const Point* p, float frameW, float frameH)
     s.roll  = -std::atan2 (ex.y, ex.x);
     if (frameW > 0 && frameH > 0)
     {
-        s.headX = std::clamp (1.0f - p[Mesh::nose].x / frameW, 0.0f, 1.0f);
-        s.headY = std::clamp (1.0f - p[Mesh::nose].y / frameH, 0.0f, 1.0f);
+        s.headX = unit (1.0f - p[Mesh::nose].x / frameW);
+        s.headY = unit (1.0f - p[Mesh::nose].y / frameH);
     }
     return s;
 }
 
-Shapes normalise (const MouthShape& s, const Calibration& c)
+Shapes normalise (const MouthShape& s, const Calibration& c, AutoRange* ar, float dt)
 {
-    auto unit = [] (float v) { return std::clamp (v, 0.0f, 1.0f); };
+    // how far each shape is from the neutral face, and the calibrated span for 100 %
+    const float dev[5]  = { s.gap - c.gapRest, s.width - c.widthRest, s.lift - c.liftRest, c.widthRest - s.width, s.brow - c.browRest };
+    const float span[5] = { c.gapSpan, c.widthSpan, c.liftSpan, c.puckerSpan, c.browSpan };
     Shapes v {};
-    v[Open]   = unit ((s.gap - c.gapRest) / c.gapSpan);
-    v[Width]  = unit ((s.width - c.widthRest) / c.widthSpan);
-    v[Smile]  = unit ((s.lift - c.liftRest) / c.liftSpan);
-    v[Pucker] = unit ((c.widthRest - s.width) / c.puckerSpan);
-    v[Brows]  = unit ((s.brow - c.browRest) / c.browSpan);
+    for (size_t i = 0; i < 5; ++i)
+    {
+        float full = span[i];
+        if (ar != nullptr)
+        {
+            // the furthest this face went, forgotten over about a minute; never below a third
+            // of the calibrated span (twitches stay small), never above one and a half
+            auto& peak = ar->peak[i];
+            peak = std::max (peak * std::exp (-dt / 60.0f), dev[i]);
+            full = std::clamp (peak, 0.35f * span[i], 1.5f * span[i]);
+        }
+        v[i] = unit (dev[i] / full);
+    }
     v[Tilt]   = unit (0.5f + (s.roll - c.rollRest) / (2.0f * c.rollSpan));
     v[HeadX]  = s.headX;
     v[HeadY]  = s.headY;
     return v;
 }
 
+// ------------------------------------------------------------------ hands
+HandShape measureHand (const Point* p, float frameW, float frameH)
+{
+    HandShape h;
+    for (int i : { HandMesh::wrist, HandMesh::indexKnuckle, HandMesh::middleKnuckle, HandMesh::ringKnuckle, HandMesh::pinkyKnuckle })
+        h.palm = { h.palm.x + p[i].x * 0.2f, h.palm.y + p[i].y * 0.2f };
+    const float size = dist (p[HandMesh::wrist], p[HandMesh::middleKnuckle]);
+    if (size < 1.0e-6f) return h;
+    if (frameW > 0 && frameH > 0) { h.x = unit (1.0f - h.palm.x / frameW); h.y = unit (1.0f - h.palm.y / frameH); }
+    // thumb and index tips: touching ~0.15 palm, apart ~1
+    h.pinch = unit ((0.9f - dist (p[HandMesh::thumbTip], p[HandMesh::indexTip]) / size) / 0.7f);
+    // fingertips from the wrist: a fist ~1 palm, an open hand ~2
+    float reach = 0;
+    for (int i : { HandMesh::indexTip, HandMesh::middleTip, HandMesh::ringTip, HandMesh::pinkyTip })
+        reach += dist (p[i], p[HandMesh::wrist]) / size * 0.25f;
+    h.spread = unit ((reach - 1.1f) / 0.8f);
+    return h;
+}
+
+void CircleDetector::reset()
+{
+    path.clear();
+    turn = 0; lastT = -1;
+    omega = 0; level = 0; spinLevel = 0.5f;
+    haveAngle = false;
+}
+
+bool CircleDetector::add (Point p, double t, float frameH, Event& ev)
+{
+    const double dt = lastT < 0 ? 1.0 / 30.0 : std::clamp (t - lastT, 1.0e-3, 0.5);
+    lastT = t;
+    path.push_back ({ p, t });
+    while (! path.empty() && t - path.front().second > 1.5) path.pop_front();
+    auto relax = [&]
+    {
+        level *= (float) std::exp (-dt / 0.25);
+        spinLevel = 0.5f + (spinLevel - 0.5f) * (float) std::exp (-dt / 0.25);
+        omega *= (float) std::exp (-dt / 0.25);
+    };
+    if (path.size() < 8) { relax(); return false; }
+
+    // the middle of the recent path, and how round it is
+    Point c;
+    for (auto& q : path) { c.x += q.first.x; c.y += q.first.y; }
+    c = { c.x / (float) path.size(), c.y / (float) path.size() };
+    float mean = 0, var = 0;
+    for (auto& q : path) mean += dist (q.first, c);
+    mean /= (float) path.size();
+    for (auto& q : path) { const float d = dist (q.first, c) - mean; var += d * d; }
+    const float spread = std::sqrt (var / (float) path.size());
+    const bool round = frameH > 0 && mean > 0.025f * frameH && spread < 0.4f * mean;
+
+    const float angle = std::atan2 (p.y - c.y, p.x - c.x);
+    float d = haveAngle ? angle - lastAngle : 0.0f;
+    while (d > 3.14159265f) d -= 6.2831853f;
+    while (d < -3.14159265f) d += 6.2831853f;
+    lastAngle = angle;
+    haveAngle = true;
+    if (! round) { turn *= 0.5; relax(); return false; }
+
+    if (turn != 0.0 && (d > 0) != (turn > 0) && std::abs (turn) > 0.5) turn = 0.0;   // turned back: start again
+    turn += d;
+    omega += (float) ((d / dt - omega) * (1.0 - std::exp (-dt / 0.15)));
+    const float size = unit ((mean / frameH - 0.03f) / 0.27f);
+    level += (size - level) * (float) (1.0 - std::exp (-dt / 0.1));
+    // the image is mirrored for the person: their clockwise is the image's anticlockwise
+    spinLevel = unit (0.5f - omega / (float) (4.0 * kTwoPi));
+
+    if (std::abs (turn) < kTwoPi) return false;
+    const int dir = turn > 0 ? -1 : 1;
+    turn -= turn > 0 ? kTwoPi : -kTwoPi;
+    ev = { size, unit (std::abs (omega) / (float) (2.0 * kTwoPi)), dir };   // two turns a second = full speed
+    return true;
+}
+
+// ------------------------------------------------------------------ MIDI
 void MouthMapper::setParams (const MapperParams& p)
 {
     for (size_t i = 0; i < 4; ++i)
@@ -70,21 +163,32 @@ void MouthMapper::setParams (const MapperParams& p)
     params.channel = std::clamp (params.channel, 1, 16);
 }
 
+bool MouthMapper::press (int ch, int note, int velocity, int who, std::vector<MidiOut>& out)
+{
+    if (held[(size_t) ((ch - 1) * 128 + note)]++ != 0) return false;
+    out.push_back ({ MidiOut::NoteOn, ch, note, std::clamp (velocity, 1, 127), who });
+    return true;
+}
+
+void MouthMapper::release (int ch, int note, std::vector<MidiOut>& out)
+{
+    auto& h = held[(size_t) ((ch - 1) * 128 + note)];
+    if (h > 0 && --h == 0) out.push_back ({ MidiOut::NoteOff, ch, note, 0 });
+}
+
 void MouthMapper::noteOn (int face, int note, int velocity, std::vector<MidiOut>& out)
 {
     auto& v = voices[(size_t) face];
     v.note = std::clamp (note, 0, 127);
     v.channel = params.faceChannels ? std::clamp (params.channel + face, 1, 16) : params.channel;
-    if (held[(size_t) ((v.channel - 1) * 128 + v.note)]++ == 0)
-        out.push_back ({ MidiOut::NoteOn, v.channel, v.note, std::clamp (velocity, 1, 127) });
+    press (v.channel, v.note, velocity, face, out);
 }
 
 void MouthMapper::noteOff (int face, std::vector<MidiOut>& out)
 {
     auto& v = voices[(size_t) face];
     if (v.note < 0) return;
-    auto& h = held[(size_t) ((v.channel - 1) * 128 + v.note)];
-    if (h > 0 && --h == 0) out.push_back ({ MidiOut::NoteOff, v.channel, v.note, 0 });
+    release (v.channel, v.note, out);
     v.note = -1;
     v.gate = 0.0f;
 }
@@ -92,6 +196,8 @@ void MouthMapper::noteOff (int face, std::vector<MidiOut>& out)
 void MouthMapper::allOff (std::vector<MidiOut>& out)
 {
     for (int f = 0; f < kMaxFaces; ++f) noteOff (f, out);
+    for (auto& p : pending) release (p.channel, p.note, out);
+    pending.clear();
 }
 
 int MouthMapper::pitchFor (int face, const Shapes& s)
@@ -111,15 +217,24 @@ int MouthMapper::pitchFor (int face, const Shapes& s)
     return std::clamp (params.triggerNote + 12 * (d / n) + steps[(size_t) (d % n)], 0, 127);
 }
 
-void MouthMapper::process (const Faces& faces, double dt, std::vector<MidiOut>& out)
+int MouthMapper::circlePitch (float size) const
+{
+    // the biggest circle plays the note, smaller ones climb two octaves of the scale
+    const auto& steps = kScales[(size_t) std::clamp (params.scale, 0, (int) kScales.size() - 1)].steps;
+    const int n = (int) steps.size(), count = 2 * n + 1;
+    const int d = std::clamp ((int) std::lround ((1.0f - unit (size)) * (float) (count - 1)), 0, count - 1);
+    return std::clamp (params.circleNote + 12 * (d / n) + steps[(size_t) (d % n)], 0, 127);
+}
+
+void MouthMapper::process (const Scene& scene, double dt, std::vector<MidiOut>& out)
 {
     for (size_t i = 0; i < 4; ++i)
     {
         const auto& s = params.slots[i];
-        const auto f = (size_t) std::clamp (s.face, 0, kMaxFaces - 1);
-        const float t = faces.shapes[f][(size_t) std::clamp (s.source, 0, kNumSources - 1)];
+        const auto w = (size_t) std::clamp (s.who, 0, kNumWho - 1);
+        const float t = scene.shapes[w][(size_t) std::clamp (s.source, 0, kNumSources - 1)];
         if (! primed[i]) { value[i] = t; primed[i] = true; }
-        else if (faces.present[f])
+        else if (scene.present[w])
         {
             const double tau = std::max (0.001, s.smoothMs / 1000.0);
             value[i] += (t - value[i]) * (float) (1.0 - std::exp (-dt / tau));
@@ -142,13 +257,13 @@ void MouthMapper::process (const Faces& faces, double dt, std::vector<MidiOut>& 
         else                              out.push_back ({ MidiOut::PitchBend, params.channel, code, 0 });
     }
 
-    // the notes: each face's own, on when its mouth opens past the threshold, off when it closes
+    // the faces' notes: each its own, on when its mouth opens past the threshold, off when it closes
     const float on = std::max (0.02f, params.threshold), off = on * 0.7f;
     for (int f = 0; f < kMaxFaces; ++f)
     {
         auto& v = voices[(size_t) f];
-        const bool present = faces.present[(size_t) f];
-        const auto& s = faces.shapes[(size_t) f];
+        const bool present = scene.present[(size_t) f];
+        const auto& s = scene.shapes[(size_t) f];
         const float open = present ? s[Open] : 0.0f;
         if (open < on * 0.5f) v.armTime = 0.0;
         else if (v.note < 0) v.armTime += dt;
@@ -182,11 +297,38 @@ void MouthMapper::process (const Faces& faces, double dt, std::vector<MidiOut>& 
             {
                 const Voice old = v;
                 noteOn (f, pitch, 90, out);
-                auto& h = held[(size_t) ((old.channel - 1) * 128 + old.note)];
-                if (h > 0 && --h == 0) out.push_back ({ MidiOut::NoteOff, old.channel, old.note, 0 });
+                release (old.channel, old.note, out);
             }
         }
         v.gate = v.note >= 0 ? open : 0.0f;
+    }
+
+    // the hands' circles: a short note each, big circles low and slow ones soft
+    for (auto it = pending.begin(); it != pending.end();)
+    {
+        it->left -= dt;
+        if (it->left > 0.0) { ++it; continue; }
+        release (it->channel, it->note, out);
+        it = pending.erase (it);
+    }
+    for (int h = 0; h < kMaxHands; ++h)
+    {
+        const int count = scene.circles[(size_t) h];
+        auto& seen = circlesSeen[(size_t) h];
+        const bool fresh = seen >= 0 && count > seen;
+        seen = count;
+        if (! fresh || ! params.circleNotes) continue;
+        const int ch = params.faceChannels ? std::clamp (params.channel + handWho (h), 1, 16) : params.channel;
+        const int note = circlePitch (scene.circleSize[(size_t) h]);
+        const int vel = (int) std::lround (50.0f + 77.0f * unit (scene.circleSpeed[(size_t) h]));
+        if (! press (ch, note, vel, handWho (h), out))
+        {
+            // already sounding (a quick second circle): end the old one, play it again
+            for (auto& p : pending) if (p.channel == ch && p.note == note) p.left = 0.0;
+            out.push_back ({ MidiOut::NoteOff, ch, note, 0 });
+            out.push_back ({ MidiOut::NoteOn, ch, note, vel, handWho (h) });
+        }
+        pending.push_back ({ ch, note, params.circleLength });
     }
 }
 

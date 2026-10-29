@@ -53,15 +53,15 @@ Source & updates: https://github.com/buttlerkid/sequencer
 DY Mouth $version  (Windows x64, VST3 instrument, MIDI out)
 ===========================================================
 
-Your webcam follows up to four faces: how open each mouth is, how wide, smiling,
-puckered, the brows, the head's tilt and position. Four outputs send any of them as
-a MIDI CC, pitch bend or pressure, and every open mouth plays its own note (a chord
-shared out, or the pitch from how high the head is). A built-in talk-box choir is on
-so you hear it at once.
+Your webcam follows up to four faces and two hands. Every open mouth sings its own
+note, every circle a hand draws rings one (big circles low, small high, fast loud),
+and smiles, brows, head tilt, pinches and hand height become MIDI controllers.
+Built-in talk-box voices and a bell are on, so you hear it at once. Record a take
+and drag it into Live as a clip.
 
 INSTALL
-  1. Copy the folder  "DY Mouth.vst3"  into  C:\Program Files\Common Files\VST3\
-     (keep everything inside it: DYMouth.onnxruntime.dll runs the face model)
+  1. Close Live. Copy the folder  "DY Mouth.vst3"  into  C:\Program Files\Common Files\VST3\
+     (keep everything inside it: DYMouth.onnxruntime.dll runs the face and hand models)
   2. Ableton Live: Options > Preferences > Plug-Ins > "Use VST3 Plug-In System Folders" = On, Rescan.
   3. Browser > Plug-Ins > VST3 > dy > DY Mouth  ->  drag onto a MIDI track. Open its window.
   4. Windows: Settings > Privacy & security > Camera > "Let desktop apps access your camera" = On.
@@ -70,21 +70,25 @@ INSTALL
 FIRST
   Look at the camera with a relaxed, closed mouth and click "Neutral" (with friends:
   everyone at once). Open your mouth past the mark on the OPEN bar: the note plays.
+  Draw circles in the air with a hand: each one rings the bell.
   Pitch = Head height: raise and lower your head while singing.
+
+RECORD IT
+  Click Record, play, click it again, then drag the box next to it into Live: a MIDI clip.
 
 CONTROL ANOTHER INSTRUMENT
   Turn "Preview sound" off. On a second MIDI track: MIDI From = the DY Mouth track,
   second box = "DY Mouth", Monitor = In, and put an instrument there. Wavetable and
-  Operator: route Mod Wheel / Pressure in their MIDI modulation; most synths also
-  take CC 74 (brightness).
+  Operator: route Mod Wheel / Pressure / Pitch Bend in their MIDI modulation; most
+  synths also take CC 74 (brightness) and CC 11 (expression).
 
 CONTROL ANY KNOB IN LIVE
   Run Standalone\DY Mouth.exe next to Live. Options > Audio/MIDI Settings: MIDI
   output = a virtual MIDI cable such as loopMIDI. In Live's MIDI preferences turn
-  Remote on for that port, then Ctrl+M, click a knob and move your mouth.
+  Remote on for that port, then Ctrl+M, click a knob and move.
 
-Face model: MediaPipe Face Landmarker (Google, Apache 2.0). Runs on your computer;
-no picture ever leaves it.
+Face and hand models: MediaPipe Face and Hand Landmarker (Google, Apache 2.0). They
+run on your computer; no picture ever leaves it.
 
 Source & updates: https://github.com/buttlerkid/sequencer
 "@

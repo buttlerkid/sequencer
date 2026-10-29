@@ -1,4 +1,4 @@
-set(DY_MOUTH_VERSION 0.2.0)
+set(DY_MOUTH_VERSION 0.3.0)
 
 if(DY_BUILD_TESTS)
     add_executable(mouth_tests Tests/MouthTests.cpp Source/Engine/MouthMapper.cpp)
@@ -14,10 +14,11 @@ if(DY_BUILD_PLUGIN AND WIN32)
     FetchContent_MakeAvailable(onnxruntime)
     set(DY_ORT_DLL "${onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll")
 
-    # MediaPipe Face Landmarker models (Apache 2.0), converted to ONNX by Models/convert.py
+    # MediaPipe Face and Hand Landmarker models (Apache 2.0), converted to ONNX by Models/convert.py
     juce_add_binary_data(DYMouthModels
         NAMESPACE MouthModels
-        SOURCES Models/face_detector.onnx Models/face_landmarks_detector.onnx)
+        SOURCES Models/face_detector.onnx Models/face_landmarks_detector.onnx
+                Models/hand_detector.onnx Models/hand_landmarks_detector.onnx)
 
     juce_add_plugin(DYMouth
         VERSION                     ${DY_MOUTH_VERSION}

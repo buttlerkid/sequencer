@@ -205,6 +205,85 @@ int main()
         m.process (at (4.4f / 11.0f, 0.8f), dt, out);
         CHECK (m.noteOf (0) == 69);
     }
+
+    std::puts ("Auto range");
+    {   // a face that only ever smiles a little still reaches 100 %, a twitch stays small
+        Calibration c; AutoRange ar;
+        MouthShape small { c.gapRest, c.widthRest, c.liftRest + 0.4f * c.liftSpan, c.browRest };
+        const float before = normalise (small, c)[Smile];
+        CHECK_NEAR (before, 0.4f, 1e-4f);
+        CHECK_NEAR (normalise (small, c, &ar, 0.033f)[Smile], 1.0f, 1e-4f);
+        MouthShape twitch { c.gapRest, c.widthRest, c.liftRest + 0.05f * c.liftSpan, c.browRest };
+        CHECK (normalise (twitch, c, &ar, 0.033f)[Smile] < 0.2f);
+        // the peak is forgotten slowly: after ten minutes it is down to the floor
+        normalise (MouthShape { c.gapRest, c.widthRest, c.liftRest, c.browRest }, c, &ar, 600.0f);
+        CHECK_NEAR (normalise (MouthShape { c.gapRest, c.widthRest, c.liftRest + 0.35f * c.liftSpan, c.browRest }, c, &ar, 0.0f)[Smile], 1.0f, 1e-3f);
+    }
+
+    std::puts ("Hands");
+    {   // pinch and spread from the fingertips
+        std::vector<Point> h (HandMesh::kCount, Point { 300, 300 });
+        h[HandMesh::wrist] = { 300, 400 };
+        for (int k : { HandMesh::indexKnuckle, HandMesh::middleKnuckle, HandMesh::ringKnuckle, HandMesh::pinkyKnuckle }) h[(size_t) k] = { 300, 300 };
+        for (int k : { HandMesh::indexTip, HandMesh::middleTip, HandMesh::ringTip, HandMesh::pinkyTip }) h[(size_t) k] = { 300, 200 };   // open: 2 palms out
+        h[HandMesh::thumbTip] = { 300, 200 };                                                                                          // touching the index
+        auto s = measureHand (h.data(), 600, 800);
+        CHECK (s.spread > 0.95f && s.pinch > 0.95f);
+        CHECK_NEAR (s.x, 0.5f, 1e-4f);
+        for (int k : { HandMesh::indexTip, HandMesh::middleTip, HandMesh::ringTip, HandMesh::pinkyTip }) h[(size_t) k] = { 300, 300 };   // a fist
+        h[HandMesh::thumbTip] = { 420, 330 };
+        s = measureHand (h.data(), 600, 800);
+        CHECK (s.spread < 0.05f && s.pinch < 0.05f);
+    }
+    {   // circles: each full turn counts once, its size from the radius, a straight swipe never counts
+        auto draw = [] (float radius, double turnsPerSecond, double seconds, int& count, CircleDetector::Event& last)
+        {
+            CircleDetector d; count = 0;
+            for (double t = 0; t < seconds; t += 1.0 / 30.0)
+            {
+                const double a = 6.2831853 * turnsPerSecond * t;
+                CircleDetector::Event e;
+                if (d.add ({ 320 + radius * (float) std::cos (a), 240 + radius * (float) std::sin (a) }, t, 480, e)) { ++count; last = e; }
+            }
+            return d.circle();
+        };
+        int n = 0; CircleDetector::Event e {};
+        const float level = draw (100, 1.0, 4.05, n, e);
+        CHECK (n >= 3 && n <= 4);
+        CHECK_NEAR (e.size, (100.0f / 480.0f - 0.03f) / 0.27f, 0.08f);
+        CHECK (level > 0.4f);
+        CHECK (e.direction == -1);                              // the image's clockwise is the person's anticlockwise
+        int small = 0; CircleDetector::Event es {};
+        draw (30, 2.0, 2.05, small, es);
+        CHECK (small >= 3 && es.size < 0.15f && es.speed > 0.8f);
+        CircleDetector d; int swipes = 0;
+        for (double t = 0; t < 3; t += 1.0 / 30.0)
+        {
+            CircleDetector::Event x;
+            swipes += d.add ({ 100 + (float) std::fmod (t * 400, 400), 240 }, t, 480, x) ? 1 : 0;
+        }
+        CHECK (swipes == 0);
+    }
+    {   // a circle plays a short note: bigger is lower, faster is louder
+        MouthMapper m; MapperParams p; for (auto& s : p.slots) s.dest = DestOff;
+        p.trigger = false; p.circleNote = 36; p.scale = 2; p.circleLength = 0.1f;
+        m.setParams (p);
+        CHECK (m.circlePitch (1.0f) == 36 && m.circlePitch (0.0f) == 60);
+        Scene sc; std::vector<MidiOut> out;
+        m.process (sc, dt, out);
+        sc.circles[1] = 1; sc.circleSize[1] = 1.0f; sc.circleSpeed[1] = 1.0f;
+        m.process (sc, dt, out);
+        CHECK (out.size() == 1 && out[0].type == MidiOut::NoteOn && out[0].data1 == 36 && out[0].data2 == 127 && out[0].who == handWho (1));
+        out.clear();
+        for (int b = 0; b < 12; ++b) m.process (sc, dt, out);
+        CHECK (out.size() == 1 && out[0].type == MidiOut::NoteOff && out[0].data1 == 36);
+        // a hand as an output's source
+        p.slots[0] = { Spin, DestCC, 9, 1.0f, 0.0f, 1.0f, false, handWho (0) };
+        m.setParams (p);
+        sc.present[(size_t) handWho (0)] = true; sc.shapes[(size_t) handWho (0)][Spin] = 1.0f;
+        out.clear(); for (int b = 0; b < 50; ++b) m.process (sc, dt, out);
+        CHECK (! out.empty() && out.back().data1 == 9 && out.back().data2 == 127);
+    }
     std::printf ("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
