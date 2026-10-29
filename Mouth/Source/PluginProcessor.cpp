@@ -4,6 +4,12 @@
 
 namespace dy::mouth {
 
+juce::Colour faceColour (int face)
+{
+    static const juce::Colour c[kMaxFaces] { Colours::brass, Colours::teal, Colours::lilac, juce::Colour (0xffe8897a) };
+    return c[(size_t) juce::jlimit (0, kMaxFaces - 1, face)];
+}
+
 // ------------------------------------------------------------------ camera + tracker
 FaceInput::FaceInput() : juce::Thread ("DY Mouth tracker") {}
 
@@ -40,7 +46,7 @@ void FaceInput::close()
     if (device != nullptr) device->removeListener (this);
     device.reset();
     openIndex = -1;
-    face = false;
+    for (auto& p : present) p = false;
 }
 
 void FaceInput::imageReceived (const juce::Image& img)
@@ -64,17 +70,35 @@ FaceInput::View FaceInput::view() const
     return shown;
 }
 
-Calibration FaceInput::calibration() const
+Faces FaceInput::faces() const
 {
-    std::lock_guard<std::mutex> g (lock);
-    return calib;
+    Faces f;
+    for (size_t i = 0; i < (size_t) kMaxFaces; ++i)
+    {
+        f.present[i] = present[i].load();
+        for (size_t k = 0; k < (size_t) kNumSources; ++k) f.shapes[i][k] = shape[i][k].load();
+    }
+    return f;
 }
 
-void FaceInput::setCalibration (const Calibration& c)
+int FaceInput::faceCount() const
+{
+    int n = 0;
+    for (auto& p : present) n += p.load() ? 1 : 0;
+    return n;
+}
+
+Calibration FaceInput::calibration (int face) const
 {
     std::lock_guard<std::mutex> g (lock);
-    calib = c;
-    calibrated = true;
+    return calib[(size_t) face];
+}
+
+void FaceInput::setCalibration (int face, const Calibration& c)
+{
+    std::lock_guard<std::mutex> g (lock);
+    calib[(size_t) face] = c;
+    calibrated[(size_t) face] = true;
 }
 
 void FaceInput::run()
@@ -125,34 +149,47 @@ void FaceInput::run()
             }
         }
 
-        auto res = tracker.track ({ rgb.data(), w, h, w * 3 });
-        for (auto& p : res.points) p = { p.x * (float) step, p.y * (float) step };
-        if (res.face)
+        tracker.setMaxFaces (maxFaces.load());
+        auto found = tracker.track ({ rgb.data(), w, h, w * 3 });
+        std::array<bool, kMaxFaces> seen {};
+        std::vector<FaceView> views;
+        for (auto& r : found)
         {
-            const auto s = measure (res.points.data());
-            if (! calibrated) { calibrated = true; captureNeutral(); }
-            Calibration c = calibration();
-            if (int left = neutralFrames.load(); left > 0)
+            const auto id = (size_t) r.id;
+            for (auto& p : r.points) p = { p.x * (float) step, p.y * (float) step };
+            const auto s = measure (r.points.data(), (float) img.getWidth(), (float) img.getHeight());
+            if (! calibrated[id]) { calibrated[id] = true; neutralLeft[id] = kNeutralFrames; }
+            Calibration c = calibration (r.id);
+            if (int left = neutralLeft[id].load(); left > 0)
             {
-                neutralSum.gap += s.gap; neutralSum.width += s.width; neutralSum.lift += s.lift;
+                auto& sum = neutralSum[id];
+                if (left == kNeutralFrames) sum = {};
+                sum.gap += s.gap; sum.width += s.width; sum.lift += s.lift; sum.brow += s.brow; sum.roll += s.roll;
                 if (--left == 0)
                 {
-                    c.gapRest = neutralSum.gap / 15.0f; c.widthRest = neutralSum.width / 15.0f; c.liftRest = neutralSum.lift / 15.0f;
-                    setCalibration (c);
+                    const float n = (float) kNeutralFrames;
+                    c.gapRest = sum.gap / n; c.widthRest = sum.width / n; c.liftRest = sum.lift / n;
+                    c.browRest = sum.brow / n; c.rollRest = sum.roll / n;
+                    setCalibration (r.id, c);
                 }
-                neutralFrames = left;
+                neutralLeft[id] = left;
             }
             const auto v = normalise (s, c);
-            for (size_t i = 0; i < shape.size(); ++i) shape[i] = v[i];
+            for (size_t k = 0; k < v.size(); ++k) shape[id][k] = v[k];
+            seen[id] = true;
+            views.push_back ({ r.id, r.points });
         }
-        face = res.face;
+        for (size_t i = 0; i < (size_t) kMaxFaces; ++i)
+        {
+            present[i] = seen[i];
+            if (! seen[i] && neutralLeft[i].load() != kNeutralFrames) neutralLeft[i] = 0;   // a face that leaves half way drops its Neutral
+        }
 
         {
             std::lock_guard<std::mutex> g (lock);
             shown.image = img;
-            shown.points = res.points;
-            shown.face = res.face;
-            shown.status = res.face ? juce::String() : (tracker.error().empty() ? juce::String ("Looking for a face") : juce::String (tracker.error()));
+            shown.faces = std::move (views);
+            shown.status = ! found.empty() ? juce::String() : (tracker.error().empty() ? juce::String ("Looking for faces") : juce::String (tracker.error()));
         }
 
         ++frames;
@@ -177,15 +214,22 @@ float PreviewVoice::Bandpass::process (float x, float f, float q, double rate)
     return v1;
 }
 
-void PreviewVoice::render (float* L, float* R, int n, int note, float gate, const std::array<float, kNumSources>& s, float level)
+void PreviewVoice::render (float* L, float* R, int n, int note, float gate, const Shapes& s, float level)
 {
-    const float targetAmp = gate > 0.0f ? 0.45f + 0.55f * gate : 0.0f;
+    if (note >= 0) lastNote = (float) note;
+    const float targetAmp = note >= 0 ? 0.45f + 0.55f * gate : 0.0f;
+    if (targetAmp == 0.0f && amp < 1.0e-4f) { amp = 0.0f; return; }
     const float t1 = 280.0f + 620.0f * s[Open];
     const float t2 = juce::jlimit (600.0f, 2600.0f, 950.0f + 1300.0f * s[Width] + 500.0f * s[Smile] - 450.0f * s[Pucker]);
-    const float targetFreq = 440.0f * std::pow (2.0f, (float) (note - 69) / 12.0f);
+    // a head tilt bends it up to two semitones either way (a little dead zone for a straight head)
+    const float tilt = (s[Tilt] - 0.5f) * 2.0f;
+    const float bend = 2.0f * (std::abs (tilt) < 0.15f ? 0.0f : (tilt - std::copysign (0.15f, tilt)) / 0.85f);
+    const float targetFreq = 440.0f * std::pow (2.0f, (lastNote + bend - 69.0f) / 12.0f);
     const float glide = 1.0f - std::exp (-1.0f / (0.012f * (float) sr));
+    const float targetPan = s[HeadX];
     for (int i = 0; i < n; ++i)
     {
+        pan += (targetPan - pan) * glide;
         amp += (targetAmp - amp) * glide;
         f1 += (t1 - f1) * glide;
         f2 += (t2 - f2) * glide;
@@ -202,12 +246,15 @@ void PreviewVoice::render (float* L, float* R, int n, int note, float gate, cons
 
         const float y = b1.process (saw, f1, 7.0f, sr) + 0.75f * b2.process (saw, f2, 9.0f, sr) + 0.3f * b3.process (saw, 2700.0f, 8.0f, sr);
         const float out = y * amp * level * 0.6f;
-        L[i] += out;
-        if (R != L) R[i] += out;
+        if (R == L) { L[i] += out; continue; }
+        L[i] += out * std::sqrt (1.0f - 0.7f * pan);
+        R[i] += out * std::sqrt (0.3f + 0.7f * pan);
     }
 }
 
 // ------------------------------------------------------------------ parameters
+juce::StringArray sourceNames() { return { "Open", "Width", "Smile", "Pucker", "Brows", "Tilt", "Head X", "Head Y" }; }
+
 static juce::AudioProcessorValueTreeState::ParameterLayout layout()
 {
     using namespace juce;
@@ -225,13 +272,21 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
     l.add (std::make_unique<AudioParameterInt>    (id (PID::velocity), "Velocity", 1, 127, 100));
     l.add (std::make_unique<AudioParameterBool>   (id (PID::preview), "Preview Sound", true));
     l.add (std::make_unique<AudioParameterFloat>  (id (PID::previewLevel), "Preview Level", NormalisableRange<float> (0.0f, 1.0f), 0.6f, pct));
+    l.add (std::make_unique<AudioParameterChoice> (id (PID::faces), "Faces", StringArray { "1 face", "2 faces", "3 faces", "4 faces" }, kMaxFaces - 1));
+    l.add (std::make_unique<AudioParameterChoice> (id (PID::pitchMode), "Pitch", StringArray { "Chord", "Head height" }, PitchChord));
+    StringArray chords, scales;
+    for (auto& c : kChords) chords.add (c.name);
+    for (auto& c : kScales) scales.add (c.name);
+    l.add (std::make_unique<AudioParameterChoice> (id (PID::chord), "Chord", chords, 1));
+    l.add (std::make_unique<AudioParameterChoice> (id (PID::scale), "Scale", scales, 2));
+    l.add (std::make_unique<AudioParameterBool>   (id (PID::faceChannels), "Face = Channel", false));
 
     // defaults: Open -> mod wheel, Smile -> pressure, Width -> CC 74, Pucker -> CC 71
     const int src[4] = { Open, Smile, Width, Pucker }, dest[4] = { DestCC, DestPressure, DestCC, DestCC }, cc[4] = { 1, 2, 74, 71 };
     for (int i = 0; i < 4; ++i)
     {
         const String n = "Out " + String (i + 1) + " ";
-        l.add (std::make_unique<AudioParameterChoice> (id (PID::slot (i, "Src")), n + "Source", StringArray { "Open", "Width", "Smile", "Pucker" }, src[i]));
+        l.add (std::make_unique<AudioParameterChoice> (id (PID::slot (i, "Src")), n + "Source", sourceNames(), src[i]));
         l.add (std::make_unique<AudioParameterChoice> (id (PID::slot (i, "Dest")), n + "Send", StringArray { "Off", "CC", "Pitch bend", "Pressure" }, dest[i]));
         l.add (std::make_unique<AudioParameterInt>    (id (PID::slot (i, "CC")), n + "CC", 0, 127, cc[i],
                                                        AudioParameterIntAttributes().withStringFromValueFunction ([] (int v, int)
@@ -241,15 +296,17 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
         l.add (std::make_unique<AudioParameterFloat>  (id (PID::slot (i, "Lo")), n + "Min", NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
         l.add (std::make_unique<AudioParameterFloat>  (id (PID::slot (i, "Hi")), n + "Max", NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
         l.add (std::make_unique<AudioParameterBool>   (id (PID::slot (i, "Inv")), n + "Invert", false));
+        l.add (std::make_unique<AudioParameterChoice> (id (PID::slot (i, "Face")), n + "Face", StringArray { "Face 1", "Face 2", "Face 3", "Face 4" }, 0));
     }
     return l;
 }
 
 static juce::StringArray paramIds()
 {
-    juce::StringArray ids { PID::channel, PID::trigger, PID::note, PID::threshold, PID::speed, PID::velocity, PID::preview, PID::previewLevel };
+    juce::StringArray ids { PID::channel, PID::trigger, PID::note, PID::threshold, PID::speed, PID::velocity, PID::preview, PID::previewLevel,
+                            PID::faces, PID::pitchMode, PID::chord, PID::scale, PID::faceChannels };
     for (int i = 0; i < 4; ++i)
-        for (auto* w : { "Src", "Dest", "CC", "Smooth", "Lo", "Hi", "Inv" }) ids.add (PID::slot (i, w));
+        for (auto* w : { "Src", "Dest", "CC", "Smooth", "Lo", "Hi", "Inv", "Face" }) ids.add (PID::slot (i, w));
     return ids;
 }
 
@@ -274,17 +331,18 @@ MapperParams MouthProcessor::readParams() const
     p.channel = i (0) + 1;
     p.trigger = f (1) > 0.5f; p.triggerNote = i (2); p.threshold = f (3);
     p.velocityFromSpeed = f (4) > 0.5f; p.velocity = i (5);
+    p.pitchMode = i (9); p.chord = i (10); p.scale = i (11); p.faceChannels = f (12) > 0.5f;
     for (int s = 0; s < 4; ++s)
     {
-        const int b = 8 + s * 7;
-        p.slots[(size_t) s] = { i (b), i (b + 1), i (b + 2), f (b + 3), f (b + 4), f (b + 5), f (b + 6) > 0.5f };
+        const int b = 13 + s * 8;
+        p.slots[(size_t) s] = { i (b), i (b + 1), i (b + 2), f (b + 3), f (b + 4), f (b + 5), f (b + 6) > 0.5f, i (b + 7) };
     }
     return p;
 }
 
 void MouthProcessor::prepareToPlay (double sampleRate, int)
 {
-    voice.prepare (sampleRate);
+    for (auto& v : voices) v.prepare (sampleRate);
     triggerAsyncUpdate();             // the camera opens once we are really in use, not while a host scans
 }
 
@@ -316,13 +374,11 @@ void MouthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     buffer.clear();
     midi.clear();                                    // the mouth is the only source of MIDI
 
-    std::array<float, kNumSources> shape {};
-    for (size_t i = 0; i < shape.size(); ++i) shape[i] = input.shape[i].load();
-    const bool face = input.face.load();
-
+    input.maxFaces = (int) raw[8]->load() + 1;
+    const auto faces = input.faces();
     mapper.setParams (readParams());
     events.clear();
-    mapper.process (shape, face, n / getSampleRate(), events);
+    mapper.process (faces, n / getSampleRate(), events);
     for (const auto& e : events)
     {
         switch (e.type)
@@ -335,24 +391,32 @@ void MouthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
     for (size_t i = 0; i < slotOut.size(); ++i) slotOut[i] = mapper.slotOutput ((int) i);
-    noteOn = mapper.noteSounding();
+    for (int f = 0; f < kMaxFaces; ++f) noteOf[(size_t) f] = mapper.noteOf (f);
 
     if (raw[6]->load() > 0.5f && buffer.getNumChannels() > 0)
-        voice.render (buffer.getWritePointer (0), buffer.getWritePointer (buffer.getNumChannels() > 1 ? 1 : 0), n,
-                      mapper.getParams().triggerNote, mapper.gate(), shape, raw[7]->load());
+        for (int f = 0; f < kMaxFaces; ++f)
+            voices[(size_t) f].render (buffer.getWritePointer (0), buffer.getWritePointer (buffer.getNumChannels() > 1 ? 1 : 0), n,
+                                       mapper.noteOf (f), mapper.gate (f), faces.shapes[(size_t) f], raw[7]->load() * 0.8f);
 }
 
 void MouthProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     juce::ValueTree root ("DYMouth");
-    root.setProperty ("version", 1, nullptr);
+    root.setProperty ("version", 2, nullptr);
     root.setProperty ("uiScale", uiScale, nullptr);
     root.setProperty ("mirror", mirror, nullptr);
     root.setProperty ("camera", cameraName, nullptr);
-    const auto c = input.calibration();
-    root.setProperty ("gapRest", c.gapRest, nullptr);
-    root.setProperty ("widthRest", c.widthRest, nullptr);
-    root.setProperty ("liftRest", c.liftRest, nullptr);
+    for (int f = 0; f < kMaxFaces; ++f)
+    {
+        const auto c = input.calibration (f);
+        juce::ValueTree t ("Neutral");
+        t.setProperty ("gap", c.gapRest, nullptr);
+        t.setProperty ("width", c.widthRest, nullptr);
+        t.setProperty ("lift", c.liftRest, nullptr);
+        t.setProperty ("brow", c.browRest, nullptr);
+        t.setProperty ("roll", c.rollRest, nullptr);
+        root.addChild (t, -1, nullptr);
+    }
     root.addChild (apvts.copyState(), -1, nullptr);
     if (auto xml = root.createXml()) copyXmlToBinary (*xml, dest);
 }
@@ -367,11 +431,19 @@ void MouthProcessor::setStateInformation (const void* data, int size)
     uiScale = (float) (double) root.getProperty ("uiScale", 0.85);
     mirror = (bool) root.getProperty ("mirror", true);
     cameraName = root.getProperty ("camera", "").toString();
-    Calibration c;
-    c.gapRest = (float) (double) root.getProperty ("gapRest", c.gapRest);
-    c.widthRest = (float) (double) root.getProperty ("widthRest", c.widthRest);
-    c.liftRest = (float) (double) root.getProperty ("liftRest", c.liftRest);
-    input.setCalibration (c);
+    // each face's neutral (a 0.1 project has none: its faces calibrate when first seen)
+    int f = 0;
+    for (const auto& t : root)
+    {
+        if (! t.hasType ("Neutral") || f >= kMaxFaces) continue;
+        Calibration c;
+        c.gapRest = (float) (double) t.getProperty ("gap", c.gapRest);
+        c.widthRest = (float) (double) t.getProperty ("width", c.widthRest);
+        c.liftRest = (float) (double) t.getProperty ("lift", c.liftRest);
+        c.browRest = (float) (double) t.getProperty ("brow", c.browRest);
+        c.rollRest = (float) (double) t.getProperty ("roll", c.rollRest);
+        input.setCalibration (f++, c);
+    }
 }
 
 juce::AudioProcessorEditor* MouthProcessor::createEditor() { return new MouthEditor (*this); }

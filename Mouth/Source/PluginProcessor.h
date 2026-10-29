@@ -11,9 +11,14 @@ namespace dy::mouth {
 namespace PID
 {
     inline const juce::String channel = "channel", trigger = "trigger", note = "note", threshold = "threshold",
-        speed = "speed", velocity = "velocity", preview = "preview", previewLevel = "previewLevel";
-    inline juce::String slot (int i, const char* what) { return "out" + juce::String (i + 1) + what; }   // Src Dest CC Smooth Lo Hi Inv
+        speed = "speed", velocity = "velocity", preview = "preview", previewLevel = "previewLevel",
+        faces = "faces", pitchMode = "pitchMode", chord = "chord", scale = "scale", faceChannels = "faceChannels";
+    inline juce::String slot (int i, const char* what) { return "out" + juce::String (i + 1) + what; }   // Src Dest CC Smooth Lo Hi Inv Face
 }
+
+// One colour per face number, on the picture, the meters and the outputs.
+juce::Colour faceColour (int face);
+juce::StringArray sourceNames();
 
 // The webcam and the face tracker. Frames arrive on the camera's thread; the newest
 // one is tracked on our own thread, so a slow frame never holds up the camera (or
@@ -29,16 +34,20 @@ public:
     int deviceIndex() const { return device != nullptr || testImage.isValid() ? openIndex : -1; }
 
     // results, for any thread
-    std::atomic<bool> face { false };
-    std::array<std::atomic<float>, kNumSources> shape {};     // normalised 0..1
+    std::array<std::atomic<bool>, kMaxFaces> present {};
+    std::array<std::array<std::atomic<float>, kNumSources>, kMaxFaces> shape {};   // normalised 0..1
     std::atomic<float> fps { 0.0f };
+    std::atomic<int> maxFaces { kMaxFaces };
+    Faces faces() const;
+    int faceCount() const;
 
-    struct View { juce::Image image; std::array<Point, Mesh::kCount> points {}; bool face = false; juce::String status; };
+    struct FaceView { int id; std::array<Point, Mesh::kCount> points; };
+    struct View { juce::Image image; std::vector<FaceView> faces; juce::String status; };
     View view() const;                      // the last frame and its landmarks, for the editor
 
-    void captureNeutral() { neutralFrames = 15; neutralSum = {}; }
-    Calibration calibration() const;
-    void setCalibration (const Calibration&);
+    void captureNeutral() { for (auto& n : neutralLeft) n = kNeutralFrames; }   // every face in view
+    Calibration calibration (int face) const;
+    void setCalibration (int face, const Calibration&);
 
 private:
     void imageReceived (const juce::Image&) override;
@@ -54,26 +63,29 @@ private:
     mutable std::mutex lock;                // pending, shown, calib, status
     juce::Image pending;
     View shown;
-    Calibration calib;
+    std::array<Calibration, kMaxFaces> calib {};
     std::vector<unsigned char> rgb;
-    std::atomic<int> neutralFrames { 0 };
-    std::atomic<bool> calibrated { false };              // never set: the first face seen becomes the neutral one
-    MouthShape neutralSum;
+    static constexpr int kNeutralFrames = 15;
+    std::array<std::atomic<int>, kMaxFaces> neutralLeft {};
+    std::array<std::atomic<bool>, kMaxFaces> calibrated {};   // never set: a face's first frames become its neutral
+    std::array<MouthShape, kMaxFaces> neutralSum {};
     int frames = 0;
     double fpsStart = 0;
 };
 
 // A small built-in voice so the plugin is audible on its own: a buzz through two
-// vowel formants that follow the mouth (a talk box). Off to play another instrument.
+// vowel formants that follow the mouth (a talk box), one per face, placed in the
+// stereo field where the face is, a head tilt bending it. Off to play another instrument.
 class PreviewVoice
 {
 public:
-    void prepare (double sampleRate) { sr = sampleRate; *this = PreviewVoice(); sr = sampleRate; }
-    void render (float* L, float* R, int n, int note, float gate, const std::array<float, kNumSources>& shape, float level);
+    void prepare (double sampleRate) { *this = PreviewVoice(); sr = sampleRate; }
+    // note < 0: silent (it fades out on its last pitch)
+    void render (float* L, float* R, int n, int note, float gate, const Shapes& shape, float level);
 private:
     struct Bandpass { float ic1 = 0, ic2 = 0; float process (float x, float f, float q, double sr); };
     double sr = 48000.0, phase = 0.0;
-    float amp = 0, f1 = 500, f2 = 1500, freq = 110;
+    float amp = 0, f1 = 500, f2 = 1500, freq = 110, pan = 0.5f, lastNote = 48;
     Bandpass b1, b2, b3;
 };
 
@@ -115,13 +127,13 @@ public:
 
     // for the editor
     std::array<std::atomic<float>, 4> slotOut {};
-    std::atomic<bool> noteOn { false };
+    std::array<std::atomic<int>, kMaxFaces> noteOf {};      // -1 = silent
 
 private:
     void handleAsyncUpdate() override { startCamera(); }
 
     MouthMapper mapper;
-    PreviewVoice voice;
+    std::array<PreviewVoice, kMaxFaces> voices;
     std::vector<MidiOut> events;
     std::vector<std::atomic<float>*> raw;
 

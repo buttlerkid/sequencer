@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iterator>
+#include <cstdlib>
 #include <sstream>
 #include <vector>
 
@@ -38,17 +39,20 @@ int main (int argc, char** argv)
     Frame f { reinterpret_cast<const unsigned char*> (ppm.data() + offset), w, h, w * 3 };
 
     const int repeat = argc > 4 ? std::atoi (argv[4]) : 1;
-    TrackResult r;
+    std::vector<TrackResult> faces;
     const auto t0 = std::chrono::steady_clock::now();
-    for (int i = 0; i < repeat; ++i) r = t.track (f);
+    for (int i = 0; i < repeat; ++i) faces = t.track (f);
     const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count() / repeat;
-    if (! r.face) { std::printf ("no face (%s)\n", t.error().c_str()); return 1; }
-    const auto s = measure (r.points.data());
-    const auto v = normalise (s, Calibration {});
-    std::printf ("face %.2f  %.1f ms/frame\n", r.score, ms);
-    std::printf ("eyes (%.0f,%.0f) (%.0f,%.0f)  lips %.0f,%.0f\n", r.points[Mesh::eyeR].x, r.points[Mesh::eyeR].y,
-                 r.points[Mesh::eyeL].x, r.points[Mesh::eyeL].y, r.points[Mesh::innerTop].x, r.points[Mesh::innerTop].y);
-    std::printf ("gap %.3f  width %.3f  lift %.3f   open %.2f width %.2f smile %.2f pucker %.2f\n",
-                 s.gap, s.width, s.lift, v[Open], v[Width], v[Smile], v[Pucker]);
+    if (faces.empty()) { std::printf ("no face (%s)\n", t.error().c_str()); return 1; }
+    std::printf ("%d face(s)  %.1f ms/frame\n", (int) faces.size(), ms);
+    for (const auto& r : faces)
+    {
+        const auto s = measure (r.points.data(), (float) w, (float) h);
+        const auto v = normalise (s, Calibration {});
+        std::printf ("face %d (%.2f)  eyes (%.0f,%.0f) (%.0f,%.0f)\n", r.id + 1, r.score, r.points[Mesh::eyeR].x, r.points[Mesh::eyeR].y,
+                     r.points[Mesh::eyeL].x, r.points[Mesh::eyeL].y);
+        std::printf ("  gap %.3f width %.3f lift %.3f brow %.3f roll %.2f head %.2f,%.2f\n", s.gap, s.width, s.lift, s.brow, s.roll, s.headX, s.headY);
+        std::printf ("  open %.2f width %.2f smile %.2f pucker %.2f brows %.2f tilt %.2f\n", v[Open], v[Width], v[Smile], v[Pucker], v[Brows], v[Tilt]);
+    }
     return 0;
 }

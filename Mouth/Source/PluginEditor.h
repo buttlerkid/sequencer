@@ -50,7 +50,7 @@ private:
     MouthProcessor& proc;
 };
 
-// The four mouth shapes as bars, and the note threshold on Open.
+// Every shape of every face as bars, and the note threshold on Open.
 class ShapeMeters : public juce::Component
 {
 public:
@@ -74,6 +74,7 @@ private:
     Combo source, dest;
     Knob cc, smooth, lo, hi;
     Toggle invert;
+    Combo face;
     float shown = -1.0f;
 };
 
@@ -84,7 +85,7 @@ public:
     ~MouthEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
-    static constexpr int kW = 1040, kH = 772;
+    static constexpr int kW = 1040, kH = 802;
 
 private:
     void timerCallback() override;
@@ -97,8 +98,8 @@ private:
     juce::ComboBox cameraBox;
     juce::TextButton neutral { "Neutral" }, mirror { "Mirror" };
     Knob note, threshold, velocity, level;
-    Toggle trigger, speed, preview;
-    Combo channel;
+    Toggle trigger, speed, preview, faceChannels;
+    Combo channel, pitchMode, chord, scale, faces;
     std::array<std::unique_ptr<OutputStrip>, 4> strips;
     juce::Rectangle<int> panels[4];
     juce::String headerText;

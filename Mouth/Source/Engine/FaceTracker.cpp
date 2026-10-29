@@ -135,32 +135,6 @@ bool FaceTracker::load (const std::wstring& runtimeDll, const void* det, size_t 
     return true;
 }
 
-bool FaceTracker::detect (const Frame& f, Roi& out)
-{
-    // the whole frame, letterboxed into the detector's square, -1..1
-    const float side = (float) std::max (f.width, f.height);
-    const float cx = f.width * 0.5f, cy = f.height * 0.5f;
-    crop (f, cx, cy, side, 0.0f, kDetSize, 2.0f / 255.0f, -1.0f, impl->detIn.data());
-    auto res = impl->detector.run (impl->detIn, kDetSize);
-    const float* reg = res[0].GetTensorData<float>();
-    const float* cls = res[1].GetTensorData<float>();
-
-    int best = -1; float bestScore = 0.5f;
-    for (int i = 0; i < kAnchors; ++i)
-        if (const float s = sigmoid (cls[i]); s > bestScore) { bestScore = s; best = i; }
-    if (best < 0) return false;
-
-    const float* r = reg + (size_t) best * 16;
-    const Point a = impl->anchors[(size_t) best];
-    auto toFrame = [&] (float nx, float ny) { return Point { cx - side * 0.5f + nx * side, cy - side * 0.5f + ny * side }; };
-    const Point c = toFrame (a.x + r[0] / kDetSize, a.y + r[1] / kDetSize);
-    const float w = r[2] / kDetSize * side, h = r[3] / kDetSize * side;
-    const Point eyeR = toFrame (a.x + r[4] / kDetSize, a.y + r[5] / kDetSize);   // the person's right eye, left in the image
-    const Point eyeL = toFrame (a.x + r[6] / kDetSize, a.y + r[7] / kDetSize);
-    out = { c.x, c.y, std::max (w, h) * kRoiScale, std::atan2 (eyeL.y - eyeR.y, eyeL.x - eyeR.x) };
-    return out.size > 8.0f;
-}
-
 bool FaceTracker::landmarks (const Frame& f, const Roi& r, TrackResult& res)
 {
     crop (f, r.cx, r.cy, r.size, r.angle, kLmSize, 1.0f / 255.0f, 0.0f, impl->lmIn.data());
@@ -178,36 +152,125 @@ bool FaceTracker::landmarks (const Frame& f, const Roi& r, TrackResult& res)
     return true;
 }
 
-TrackResult FaceTracker::track (const Frame& f)
+std::vector<FaceTracker::Roi> FaceTracker::detect (const Frame& f, int window)
 {
-    TrackResult res;
-    if (impl == nullptr || f.rgb == nullptr || f.width < 16 || f.height < 16) return res;
+    // The detector sees a 128 px square, so faces across the room get tiny in the
+    // whole frame: window 0 is the whole frame, the others overlapping zoomed-in
+    // tiles, one a frame in turn (all at once would stall the video).
+    struct Hit { float score, x0, y0, x1, y1; Roi roi; };
+    std::vector<Hit> hits;
+    auto look = [&] (float cx, float cy, float side)
+    {
+        crop (f, cx, cy, side, 0.0f, kDetSize, 2.0f / 255.0f, -1.0f, impl->detIn.data());
+        auto res = impl->detector.run (impl->detIn, kDetSize);
+        const float* reg = res[0].GetTensorData<float>();
+        const float* cls = res[1].GetTensorData<float>();
+        auto toFrame = [&] (float nx, float ny) { return Point { cx - side * 0.5f + nx * side, cy - side * 0.5f + ny * side }; };
+        for (int i = 0; i < kAnchors; ++i)
+            if (const float s = sigmoid (cls[i]); s > 0.5f)
+            {
+                const float* r = reg + (size_t) i * 16;
+                const Point a = impl->anchors[(size_t) i];
+                const Point c = toFrame (a.x + r[0] / kDetSize, a.y + r[1] / kDetSize);
+                const float w = r[2] / kDetSize * side, h = r[3] / kDetSize * side;
+                const Point eyeR = toFrame (a.x + r[4] / kDetSize, a.y + r[5] / kDetSize);   // the person's right eye, left in the image
+                const Point eyeL = toFrame (a.x + r[6] / kDetSize, a.y + r[7] / kDetSize);
+                hits.push_back ({ s, c.x - w * 0.5f, c.y - h * 0.5f, c.x + w * 0.5f, c.y + h * 0.5f,
+                                  { c.x, c.y, std::max (w, h) * kRoiScale, std::atan2 (eyeL.y - eyeR.y, eyeL.x - eyeR.x) } });
+            }
+    };
+    const float W = (float) f.width, H = (float) f.height;
+    const float tile = 0.6f * std::min (W, H);
+    const int cols = (int) std::ceil ((W - tile) / (tile * 0.6f)) + 1, rows = (int) std::ceil ((H - tile) / (tile * 0.6f)) + 1;
+    window %= 1 + cols * rows;
+    if (window == 0) look (W * 0.5f, H * 0.5f, std::max (W, H));
+    else
+    {
+        const int c = (window - 1) % cols, r = (window - 1) / cols;
+        look (tile * 0.5f + (cols > 1 ? (W - tile) * (float) c / (float) (cols - 1) : (W - tile) * 0.5f),
+              tile * 0.5f + (rows > 1 ? (H - tile) * (float) r / (float) (rows - 1) : (H - tile) * 0.5f), tile);
+    }
+    std::sort (hits.begin(), hits.end(), [] (const Hit& a, const Hit& b) { return a.score > b.score; });
+
+    // keep the best of each overlapping group (non-maximum suppression)
+    auto iou = [] (const Hit& a, const Hit& b)
+    {
+        const float w = std::max (0.0f, std::min (a.x1, b.x1) - std::max (a.x0, b.x0));
+        const float h = std::max (0.0f, std::min (a.y1, b.y1) - std::max (a.y0, b.y0));
+        const float inter = w * h, uni = (a.x1 - a.x0) * (a.y1 - a.y0) + (b.x1 - b.x0) * (b.y1 - b.y0) - inter;
+        return uni > 0.0f ? inter / uni : 0.0f;
+    };
+    std::vector<Hit> kept;
+    for (const auto& h : hits)
+    {
+        if (std::any_of (kept.begin(), kept.end(), [&] (const Hit& k) { return iou (h, k) > 0.3f; })) continue;
+        kept.push_back (h);
+    }
+    std::vector<Roi> out;
+    for (const auto& h : kept)
+        if (h.roi.size > 8.0f && (int) out.size() < kMaxFaces) out.push_back (h.roi);
+    return out;
+}
+
+FaceTracker::Roi FaceTracker::roiFrom (const TrackResult& res)
+{
+    // around the landmarks, turned with the eyes
+    const Point e0 = res.points[Mesh::eyeR], e1 = res.points[Mesh::eyeL];
+    const float angle = std::atan2 (e1.y - e0.y, e1.x - e0.x), c = std::cos (angle), s = std::sin (angle);
+    float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+    for (const auto& p : res.points)
+    {
+        const float u = c * p.x + s * p.y, v = -s * p.x + c * p.y;
+        x0 = std::min (x0, u); x1 = std::max (x1, u); y0 = std::min (y0, v); y1 = std::max (y1, v);
+    }
+    const float u = 0.5f * (x0 + x1), v = 0.5f * (y0 + y1);
+    return { c * u - s * v, s * u + c * v, std::max (x1 - x0, y1 - y0) * kRoiScale, angle };
+}
+
+std::vector<TrackResult> FaceTracker::track (const Frame& f)
+{
+    std::vector<TrackResult> results;
+    if (impl == nullptr || f.rgb == nullptr || f.width < 16 || f.height < 16) return results;
     try
     {
-        if (! tracking && ! detect (f, roi)) return res;
-        if (! landmarks (f, roi, res))
+        // follow the faces we have, each on a crop around where it was
+        std::vector<Track> kept;
+        for (const auto& t : tracks)
         {
-            // lost it: look for the face again in this same frame
-            tracking = false;
-            if (! detect (f, roi) || ! landmarks (f, roi, res)) return res;
+            TrackResult r;
+            if (! landmarks (f, t.roi, r)) continue;
+            const Roi next = roiFrom (r);
+            // two crops that slid onto the same face: keep the first
+            const bool twin = std::any_of (kept.begin(), kept.end(), [&] (const Track& k)
+                              { return std::hypot (k.roi.cx - next.cx, k.roi.cy - next.cy) < 0.3f * std::min (k.roi.size, next.size); });
+            if (twin) continue;
+            r.id = t.id;
+            kept.push_back ({ t.id, next });
+            results.push_back (r);
         }
-        tracking = true;
-        res.face = true;
+        tracks = std::move (kept);
+        while ((int) tracks.size() > maxFaces) { tracks.pop_back(); results.pop_back(); }
 
-        // the next crop: around these landmarks, turned with the eyes
-        const Point e0 = res.points[Mesh::eyeR], e1 = res.points[Mesh::eyeL];
-        const float angle = std::atan2 (e1.y - e0.y, e1.x - e0.x), c = std::cos (angle), s = std::sin (angle);
-        float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
-        for (const auto& p : res.points)
-        {
-            const float u = c * p.x + s * p.y, v = -s * p.x + c * p.y;
-            x0 = std::min (x0, u); x1 = std::max (x1, u); y0 = std::min (y0, v); y1 = std::max (y1, v);
-        }
-        const float u = 0.5f * (x0 + x1), v = 0.5f * (y0 + y1);
-        roi = { c * u - s * v, s * u + c * v, std::max (x1 - x0, y1 - y0) * kRoiScale, angle };
+        // look for new faces, one window a frame
+        if ((int) tracks.size() < maxFaces)
+            for (const auto& roi : detect (f, frameNo++))
+            {
+                if ((int) tracks.size() >= maxFaces) break;
+                const bool known = std::any_of (tracks.begin(), tracks.end(), [&] (const Track& t)
+                                   { return std::hypot (t.roi.cx - roi.cx, t.roi.cy - roi.cy) < 0.5f * std::max (t.roi.size, roi.size); });
+                if (known) continue;
+                TrackResult r;
+                if (! landmarks (f, roi, r)) continue;
+                int id = 0;                       // the lowest free number
+                while (std::any_of (tracks.begin(), tracks.end(), [&] (const Track& t) { return t.id == id; })) ++id;
+                r.id = id;
+                tracks.push_back ({ id, roiFrom (r) });
+                results.push_back (r);
+            }
+        err.clear();
     }
-    catch (const std::exception& e) { err = e.what(); tracking = false; res.face = false; }
-    return res;
+    catch (const std::exception& e) { err = e.what(); tracks.clear(); results.clear(); }
+    return results;
 }
 
 } // namespace dy::mouth

@@ -53,9 +53,11 @@ Source & updates: https://github.com/buttlerkid/sequencer
 DY Mouth $version  (Windows x64, VST3 instrument, MIDI out)
 ===========================================================
 
-Your webcam follows your mouth: how open, how wide, smiling, puckered. Each of
-four outputs sends one of them as a MIDI CC, pitch bend or pressure, and opening
-your mouth can play a note. A built-in talk-box voice is on so you hear it at once.
+Your webcam follows up to four faces: how open each mouth is, how wide, smiling,
+puckered, the brows, the head's tilt and position. Four outputs send any of them as
+a MIDI CC, pitch bend or pressure, and every open mouth plays its own note (a chord
+shared out, or the pitch from how high the head is). A built-in talk-box choir is on
+so you hear it at once.
 
 INSTALL
   1. Copy the folder  "DY Mouth.vst3"  into  C:\Program Files\Common Files\VST3\
@@ -66,8 +68,9 @@ INSTALL
      Close other apps that use the webcam (Zoom, Teams, OBS...).
 
 FIRST
-  Look at the camera with a relaxed, closed mouth and click "Neutral".
-  Open your mouth past the mark on the OPEN bar: the note plays.
+  Look at the camera with a relaxed, closed mouth and click "Neutral" (with friends:
+  everyone at once). Open your mouth past the mark on the OPEN bar: the note plays.
+  Pitch = Head height: raise and lower your head while singing.
 
 CONTROL ANOTHER INSTRUMENT
   Turn "Preview sound" off. On a second MIDI track: MIDI From = the DY Mouth track,
