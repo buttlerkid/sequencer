@@ -9,8 +9,8 @@
 
 namespace dy::mouth {
 
-constexpr int kMaxFaces = 4, kMaxHands = 2;
-constexpr int kNumWho = kMaxFaces + kMaxHands;     // faces 0..3, then hands 4..5
+constexpr int kMaxFaces = 4, kMaxHands = 4;
+constexpr int kNumWho = kMaxFaces + kMaxHands;     // faces 0..3, then hands 4..7
 constexpr int handWho (int hand) { return kMaxFaces + hand; }
 
 // What the plugin follows, all 0..1. Faces fill Open .. HeadY, hands HandX .. Spin.
@@ -27,6 +27,10 @@ struct Scene
     // circles drawn by each hand so far, and the last one's size and speed (0..1)
     std::array<int, kMaxHands> circles {};
     std::array<float, kMaxHands> circleSize {}, circleSpeed {};
+    // strums (quick swipes up or down) so far, and the last one's speed (0..1) and way (+1 down)
+    std::array<int, kMaxHands> strums {};
+    std::array<float, kMaxHands> strumSpeed {};
+    std::array<int, kMaxHands> strumDirection {};
 };
 using Faces = Scene;
 
@@ -119,9 +123,27 @@ private:
     bool haveAngle = false;
 };
 
+// Strums: a quick swipe of a hand up or down (air guitar). Reports each swipe once,
+// with how fast it went; the same way again needs a short pause, so one long swipe
+// is one strum.
+class StrumDetector
+{
+public:
+    struct Event { float speed; int direction; };          // speed 0..1; +1 down, -1 up (as the person sees it)
+    bool add (Point p, double t, float frameHeight, Event& event);
+    void reset() { path.clear(); lastStrum = -1.0; lastDirection = 0; }
+    double sinceLast (double t) const { return lastStrum < 0 ? 1.0e9 : t - lastStrum; }
+    int lastWay() const { return lastDirection; }
+private:
+    std::deque<std::pair<Point, double>> path;
+    double lastStrum = -1.0;
+    int lastDirection = 0;
+};
+
 // ------------------------------------------------------------------ MIDI out
 enum Dest { DestOff = 0, DestCC, DestPitchBend, DestPressure };
 enum PitchMode { PitchChord = 0, PitchHeight };
+enum HandMode { HandTheremin = 0, HandGuitar, HandCircles };
 
 struct SlotParams
 {
@@ -131,7 +153,7 @@ struct SlotParams
     float smoothMs = 60.0f;
     float lo = 0.0f, hi = 1.0f;     // output range
     bool invert = false;
-    int who = 0;                    // face 0..3, hand 4..5
+    int who = 0;                    // face 0..3, hand 4..7
 };
 
 struct MapperParams
@@ -147,9 +169,10 @@ struct MapperParams
     int pitchMode = PitchChord;
     int chord = 1;                  // kChords: the faces share it out, face 1 the root
     int scale = 2;                  // kScales: Head height picks a note of it, two octaves from the note
-    bool circleNotes = true;        // every circle a hand draws plays a note
-    int circleNote = 48;            // the biggest circle; smaller ones climb the scale, two octaves
-    float circleLength = 0.4f;      // seconds
+    bool handNotes = true;          // the hands play (as a theremin, an air guitar or with circles)
+    int handMode = HandTheremin;
+    int handNote = 48;              // the lowest note the hands play; they climb two octaves of the scale
+    float handLength = 0.4f;        // seconds, for strums and circles
 };
 
 struct NamedSet { const char* name; std::vector<int> steps; };
@@ -176,26 +199,34 @@ public:
     float slotOutput (int i) const { return output[(size_t) i]; }  // what is sent, 0..1
     bool noteSounding (int face) const { return voices[(size_t) face].note >= 0; }
     int noteOf (int face) const { return voices[(size_t) face].note; }
-    float gate (int face) const { return voices[(size_t) face].gate; }   // the open amount while a note sounds
+    float gate (int who) const { return voices[(size_t) who].gate; }    // the open amount (hand: openness) while a note sounds
 
     int pitchFor (int face, const Shapes&);   // the note this face plays now (Head height keeps a little hysteresis)
     int circlePitch (float size) const;       // the note a circle of this size plays
+    int handDegree (float height, int& degree) const;   // two octaves of the scale bottom to top, with hysteresis
+    int degreeNote (int degree) const;        // the hands' scale from the hand note
+    // the notes of a strum: the scale's triad (and octave) on the degree the fretting hand picks
+    std::vector<int> strumChord (const Scene&, int hand) const;
+    int handNoteOf (int hand) const { return voices[(size_t) (kMaxFaces + hand)].note; }   // a theremin's note, -1 silent
 
 private:
     struct Voice { int note = -1, channel = 1, degree = -1; double armTime = 0; float gate = 0; };
-    struct Pending { int channel, note; double left; };
-    void noteOn (int face, int note, int velocity, std::vector<MidiOut>& out);
-    void noteOff (int face, std::vector<MidiOut>& out);
+    struct Timed { double at; bool on; int channel, note, velocity, who; };
+    void noteOn (int who, int note, int velocity, std::vector<MidiOut>& out);
+    void noteOff (int who, std::vector<MidiOut>& out);
     bool press (int channel, int note, int velocity, int who, std::vector<MidiOut>& out);
     void release (int channel, int note, std::vector<MidiOut>& out);
+    void retrigger (int channel, int note, int velocity, int who, std::vector<MidiOut>& out);
+    int channelOf (int who) const;
 
     MapperParams params;
     std::array<float, 4> value {}, output {};
     std::array<int, 4> lastSent { -1, -1, -1, -1 };
     std::array<bool, 4> primed {};
-    std::array<Voice, kMaxFaces> voices {};
-    std::array<int, kMaxHands> circlesSeen { -1, -1 };
-    std::vector<Pending> pending;              // circle notes waiting for their note off
+    std::array<Voice, kNumWho> voices {};      // faces' notes, then the hands' theremin notes
+    std::array<int, kMaxHands> circlesSeen { -1, -1, -1, -1 }, strumsSeen { -1, -1, -1, -1 };
+    std::vector<Timed> queue;                  // strum and circle notes waiting to start or stop
+    double clock = 0.0;
     std::array<uint8_t, 16 * 128> held {};    // players holding each channel / note, so two on one note do not cut each other off
 };
 

@@ -13,7 +13,8 @@ namespace PID
     inline const juce::String channel = "channel", trigger = "trigger", note = "note", threshold = "threshold",
         speed = "speed", velocity = "velocity", preview = "preview", previewLevel = "previewLevel",
         faces = "faces", pitchMode = "pitchMode", chord = "chord", scale = "scale", faceChannels = "faceChannels",
-        hands = "hands", circleNotes = "circleNotes", circleNote = "circleNote", circleLength = "circleLength";
+        hands = "hands", circleNotes = "circleNotes", circleNote = "circleNote", circleLength = "circleLength",
+        handMode = "handMode";   // circleNotes / circleNote / circleLength: since 0.4 the hands' notes in any mode
     inline juce::String slot (int i, const char* what) { return "out" + juce::String (i + 1) + what; }   // Src Dest CC Smooth Lo Hi Inv Face (= who)
 }
 
@@ -45,12 +46,15 @@ public:
     std::array<std::array<std::atomic<float>, kNumSources>, kMaxHands> handShape {};
     std::array<std::atomic<int>, kMaxHands> circles {};
     std::array<std::atomic<float>, kMaxHands> circleSize {}, circleSpeed {};
+    std::array<std::atomic<int>, kMaxHands> strums {}, strumWay {};
+    std::array<std::atomic<float>, kMaxHands> strumSpeed {};
     Scene scene() const;
     int faceCount() const;
     int handCount() const;
 
     struct FaceView { int id; std::array<Point, Mesh::kCount> points; };
-    struct HandView { int id; std::array<Point, HandMesh::kCount> points; std::vector<Point> trail; float circle; double lastCircle; };
+    struct HandView { int id; std::array<Point, HandMesh::kCount> points; std::vector<Point> trail; float circle;
+                      double lastCircle, lastStrum; int strumWay; };
     struct View { juce::Image image; std::vector<FaceView> faces; std::vector<HandView> hands; juce::String status; };
     View view() const;                      // the last frame and its landmarks, for the editor
 
@@ -75,6 +79,7 @@ private:
     } handThread { *this };
     HandTracker hands;
     std::array<CircleDetector, kMaxHands> circleDetectors;
+    std::array<StrumDetector, kMaxHands> strumDetectors;
     std::array<double, kMaxHands> lastCircleTime {};
     std::vector<HandView> shownHands;
 
@@ -110,6 +115,34 @@ private:
     std::array<Voice, 16> voices {};
     int next = 0;
     double sr = 48000.0;
+};
+
+// A plucked string for air guitar strums (Karplus-Strong): a burst of noise in a
+// delay line one period long, softened a little on every pass.
+class PreviewPluck
+{
+public:
+    void prepare (double sampleRate);
+    void noteOn (int note, float velocity, float pan);
+    void render (float* L, float* R, int n, float level);
+private:
+    struct Str { std::vector<float> line; int length = 0, pos = 0, left = 0; float pan = 0.5f, damp = 0.996f; };
+    std::array<Str, 12> strings;
+    int next = 0;
+    double sr = 48000.0;
+    juce::Random random;
+};
+
+// A theremin for each hand: a nearly pure tone that glides between the scale's notes,
+// louder the more the hand opens, with a little vibrato, where the hand is.
+class PreviewTheremin
+{
+public:
+    void prepare (double sampleRate) { *this = PreviewTheremin(); sr = sampleRate; }
+    void render (float* L, float* R, int n, int note, float open, float pan, float level);
+private:
+    double sr = 48000.0, phase = 0.0, vib = 0.0;
+    float amp = 0, freq = 220, lastNote = 48, where = 0.5f;
 };
 
 // Everything played while Record is on, for dragging into Live as a clip.
@@ -187,6 +220,7 @@ public:
     // for the editor
     std::array<std::atomic<float>, 4> slotOut {};
     std::array<std::atomic<int>, kMaxFaces> noteOf {};      // -1 = silent
+    std::array<std::atomic<int>, kMaxHands> handNoteOf {};  // a theremin's note, -1 = silent
     Recorder recorder;
     void setRecording (bool on);            // message thread
 
@@ -196,6 +230,8 @@ private:
     MouthMapper mapper;
     std::array<PreviewVoice, kMaxFaces> voices;
     PreviewBell bell;
+    PreviewPluck pluck;
+    std::array<PreviewTheremin, kMaxHands> theremins;
     std::atomic<bool> recordStart { false };
     int64_t recordSamples = 0;
     double bpm = 120.0;

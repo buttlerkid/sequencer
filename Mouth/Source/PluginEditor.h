@@ -115,7 +115,7 @@ private:
     juce::TextButton neutral { "Neutral" }, mirror { "Mirror" }, record { "Record" };
     Knob note, threshold, velocity, level, circleNote, circleLength;
     Toggle trigger, speed, preview, faceChannels, circleNotes;
-    Combo channel, pitchMode, chord, scale, faces, hands;
+    Combo channel, pitchMode, chord, scale, faces, hands, handMode;
     TakeDrag take;
     std::array<std::unique_ptr<OutputStrip>, 4> strips;
     juce::Rectangle<int> panels[6];

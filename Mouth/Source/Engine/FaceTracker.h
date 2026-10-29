@@ -50,7 +50,7 @@ public:
     struct Models;
 
 protected:
-    struct Track { int id; Roi roi; };
+    struct Track { int id; Roi roi; float vx = 0, vy = 0; };   // vx, vy: how far it moved a frame
     std::vector<Roi> detect (const Frame&, int window);
 
     // Follow every track, drop lost and doubled ones, then look for new ones.

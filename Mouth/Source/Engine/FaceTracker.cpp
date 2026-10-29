@@ -1,6 +1,7 @@
 #include "FaceTracker.h"
 #include <algorithm>
 #include <cmath>
+#include <future>
 #include <mutex>
 #include <vector>
 
@@ -144,7 +145,7 @@ struct Tracker::Models
     std::shared_ptr<Runtime> runtime;
     Model detector, landmarks;
     std::vector<Point> anchors;
-    std::vector<float> detIn, lmIn;
+    std::vector<float> detIn;
     ~Models() { detector.session.reset(); landmarks.session.reset(); }
 };
 
@@ -170,7 +171,6 @@ bool Tracker::load (const std::wstring& runtimeDll, const void* det, size_t detB
                 for (int k = 0; k < perCell; ++k)
                     m->anchors.push_back ({ (x + 0.5f) / (float) cells, (y + 0.5f) / (float) cells });
     m->detIn.resize ((size_t) detSize * (size_t) detSize * 3);
-    m->lmIn.resize ((size_t) lmSize * (size_t) lmSize * 3);
     models = std::move (m);
     err.clear();
     return true;
@@ -232,7 +232,7 @@ std::vector<Tracker::Roi> Tracker::detect (const Frame& f, int window)
             kept.push_back (h);
     std::vector<Roi> out;
     for (const auto& h : kept)
-        if (h.roi.size > 8.0f && out.size() < 4) out.push_back (h.roi);
+        if (h.roi.size > 8.0f && out.size() < 8) out.push_back (h.roi);
     return out;
 }
 
@@ -243,26 +243,53 @@ std::vector<Result> Tracker::follow (const Frame& f, Landmarks&& landmarks, Next
     if (models == nullptr || f.rgb == nullptr || f.width < 16 || f.height < 16 || maxCount == 0) { tracks.clear(); return results; }
     try
     {
-        // follow the ones we have, each on a crop around where it was
-        std::vector<Track> kept;
+        // follow the ones we have, each on a crop around where it was, moved on by how
+        // fast it was going (a quick hand otherwise leaves its crop), all at the same time
+        std::vector<Roi> crops;
         for (const auto& t : tracks)
         {
-            Result r;
-            if (! landmarks (f, t.roi, r)) continue;
+            Roi c = t.roi;
+            c.cx += t.vx; c.cy += t.vy;
+            c.size *= 1.0f + std::min (0.5f, std::hypot (t.vx, t.vy) / std::max (1.0f, t.roi.size));
+            crops.push_back (c);
+        }
+        std::vector<Result> found (tracks.size());
+        std::vector<char> ok (tracks.size(), 0);
+        if (tracks.size() == 1)
+            ok[0] = landmarks (f, crops[0], found[0]) ? 1 : 0;
+        else
+        {
+            std::vector<std::future<bool>> jobs;
+            for (size_t i = 0; i < tracks.size(); ++i)
+                jobs.push_back (std::async (std::launch::async, [&, i] { return landmarks (f, crops[i], found[i]); }));
+            for (size_t i = 0; i < jobs.size(); ++i) ok[i] = jobs[i].get() ? 1 : 0;
+        }
+
+        std::vector<Track> kept;
+        bool lost = false;
+        for (size_t i = 0; i < tracks.size(); ++i)
+        {
+            const auto& t = tracks[i];
+            if (! ok[i]) { lost = true; continue; }
+            auto& r = found[i];
             const Roi n = next (r);
             // two crops that slid onto the same one: keep the first
             if (std::any_of (kept.begin(), kept.end(), [&] (const Track& k) { return closeTo (k.roi, n, 0.3f * std::min (k.roi.size, n.size)); }))
                 continue;
             r.id = t.id;
-            kept.push_back ({ t.id, n });
+            const float vx = 0.6f * (n.cx - t.roi.cx) + 0.4f * t.vx, vy = 0.6f * (n.cy - t.roi.cy) + 0.4f * t.vy;
+            kept.push_back ({ t.id, n, vx, vy });
             results.push_back (r);
         }
         tracks = std::move (kept);
         while ((int) tracks.size() > maxCount) { tracks.pop_back(); results.pop_back(); }
 
-        // look for new ones, a window at a time: every frame while there are none, every third otherwise
-        if ((int) tracks.size() < maxCount && (tracks.empty() || ++tick % 3 == 0))
-            for (const auto& roi : detect (f, frameNo++))
+        // look for new ones: right away when one was lost or none are followed, every
+        // other frame otherwise; the whole frame every other time, zoomed-in tiles between
+        if ((int) tracks.size() < maxCount && (tracks.empty() || lost || ++tick % 2 == 0))
+        {
+            const int search = frameNo++;
+            for (const auto& roi : detect (f, lost || search % 2 == 0 ? 0 : 1 + search / 2))
             {
                 if ((int) tracks.size() >= maxCount) break;
                 if (std::any_of (tracks.begin(), tracks.end(), [&] (const Track& t) { return closeTo (t.roi, roi, 0.5f * std::max (t.roi.size, roi.size)); }))
@@ -272,9 +299,10 @@ std::vector<Result> Tracker::follow (const Frame& f, Landmarks&& landmarks, Next
                 int id = 0;                       // the lowest free number
                 while (std::any_of (tracks.begin(), tracks.end(), [&] (const Track& t) { return t.id == id; })) ++id;
                 r.id = id;
-                tracks.push_back ({ id, next (r) });
+                tracks.push_back ({ id, next (r), 0.0f, 0.0f });
                 results.push_back (r);
             }
+        }
         err.clear();
     }
     catch (const std::exception& e) { err = e.what(); tracks.clear(); results.clear(); }
@@ -298,8 +326,10 @@ Tracker::Roi FaceTracker::roiFromDetection (Point c, float w, float h, const Poi
 
 bool FaceTracker::landmarks (const Frame& f, const Roi& r, TrackResult& res)
 {
-    crop (f, r.cx, r.cy, r.size, r.angle, lmSize, 1.0f / 255.0f, 0.0f, models->lmIn.data());
-    auto out = models->landmarks.run (models->lmIn, lmSize);
+    thread_local std::vector<float> in;
+    in.resize ((size_t) lmSize * (size_t) lmSize * 3);
+    crop (f, r.cx, r.cy, r.size, r.angle, lmSize, 1.0f / 255.0f, 0.0f, in.data());
+    auto out = models->landmarks.run (in, lmSize);
     res.score = sigmoid (out[1].GetTensorData<float>()[0]);
     if (res.score < 0.5f) return false;
     toFrame (out[0].GetTensorData<float>(), Mesh::kCount, r, lmSize, res.points.data());
@@ -334,8 +364,10 @@ Tracker::Roi HandTracker::roiFromDetection (Point c, float w, float h, const Poi
 
 bool HandTracker::landmarks (const Frame& f, const Roi& r, HandResult& res)
 {
-    crop (f, r.cx, r.cy, r.size, r.angle, lmSize, 1.0f / 255.0f, 0.0f, models->lmIn.data());
-    auto out = models->landmarks.run (models->lmIn, lmSize);
+    thread_local std::vector<float> in;
+    in.resize ((size_t) lmSize * (size_t) lmSize * 3);
+    crop (f, r.cx, r.cy, r.size, r.angle, lmSize, 1.0f / 255.0f, 0.0f, in.data());
+    auto out = models->landmarks.run (in, lmSize);
     res.score = out[1].GetTensorData<float>()[0];       // already a probability
     if (res.score < 0.5f) return false;
     toFrame (out[0].GetTensorData<float>(), HandMesh::kCount, r, lmSize, res.points.data());

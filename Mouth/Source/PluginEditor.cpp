@@ -127,6 +127,23 @@ void CameraView::paint (juce::Graphics& g)
             juce::Point<float> palm;
             for (int i : { HandMesh::wrist, HandMesh::indexKnuckle, HandMesh::middleKnuckle, HandMesh::ringKnuckle, HandMesh::pinkyKnuckle })
                 palm += map (hand.points[(size_t) i]) * 0.2f;
+            // a strum: a streak along the swipe, fading
+            if (hand.lastStrum < 0.35)
+            {
+                const float k = (float) (hand.lastStrum / 0.35);
+                const float len = 90.0f * (1.0f - 0.5f * k);
+                g.setColour (col.withAlpha (1.0f - k));
+                const auto tail = palm.translated (0.0f, -(float) hand.strumWay * len);
+                g.drawArrow ({ tail, palm }, 6.0f * (1.0f - k) + 2.0f, 16.0f, 14.0f);
+            }
+            // a theremin: the note it sings
+            if (const int nt = proc.handNoteOf[(size_t) hand.id].load(); nt >= 0)
+            {
+                g.setColour (col);
+                g.setFont (displayFont (15.0f));
+                g.drawText (juce::MidiMessage::getMidiNoteName (nt, true, true, 3),
+                            juce::Rectangle<float> (60.0f, 20.0f).withCentre (palm.translated (0.0f, -46.0f)), juce::Justification::centred);
+            }
             // a circle just finished: a ring flies out from the palm
             if (hand.lastCircle < 0.4)
             {
@@ -293,20 +310,20 @@ MouthEditor::MouthEditor (MouthProcessor& p)
       faceMeters (p, Open, HandX - Open, 0, kMaxFaces), handMeters (p, HandX, kNumSources - HandX, kMaxFaces, kMaxHands),
       note (p.apvts, PID::note, "Note"), threshold (p.apvts, PID::threshold, "Threshold"),
       velocity (p.apvts, PID::velocity, "Velocity"), level (p.apvts, PID::previewLevel, "Level"),
-      circleNote (p.apvts, PID::circleNote, "Circle note"), circleLength (p.apvts, PID::circleLength, "Length"),
+      circleNote (p.apvts, PID::circleNote, "Hand note"), circleLength (p.apvts, PID::circleLength, "Length"),
       trigger (p.apvts, PID::trigger, "Note on open"), speed (p.apvts, PID::speed, "Velocity from speed"),
       preview (p.apvts, PID::preview, "Preview sound"), faceChannels (p.apvts, PID::faceChannels, "Face = channel"),
-      circleNotes (p.apvts, PID::circleNotes, "Circles play"),
+      circleNotes (p.apvts, PID::circleNotes, "Hands play"),
       channel (p.apvts, PID::channel, "MIDI channel"), pitchMode (p.apvts, PID::pitchMode, "Pitch"),
       chord (p.apvts, PID::chord, "Chord"), scale (p.apvts, PID::scale, "Scale"), faces (p.apvts, PID::faces, "Faces"),
-      hands (p.apvts, PID::hands, "Hands"), take (p)
+      hands (p.apvts, PID::hands, "Hands"), handMode (p.apvts, PID::handMode, "Hands are"), take (p)
 {
     setLookAndFeel (&lnf);
     addAndMakeVisible (content);
     for (auto* c : std::initializer_list<juce::Component*> { &camera, &faceMeters, &handMeters, &cameraBox, &neutral, &mirror, &record,
                                                               &note, &threshold, &velocity, &level, &circleNote, &circleLength,
                                                               &trigger, &speed, &preview, &faceChannels, &circleNotes,
-                                                              &channel, &pitchMode, &chord, &scale, &faces, &hands, &take })
+                                                              &channel, &pitchMode, &chord, &scale, &faces, &hands, &handMode, &take })
         content.addAndMakeVisible (c);
     for (int i = 0; i < 4; ++i)
     {
@@ -329,8 +346,12 @@ MouthEditor::MouthEditor (MouthProcessor& p)
                               "the scale as the head rises, two octaves from the note");
     faces.box.setTooltip ("How many faces to follow at once (fewer is lighter on the CPU)");
     hands.box.setTooltip ("How many hands to follow (they run on their own core; Off saves it)");
-    circleNotes.setTooltip ("Every circle a hand draws plays a note: big circles low, small ones high, fast ones loud");
-    circleNote.slider.setTooltip ("The note of the biggest circle; smaller ones climb two octaves of the scale");
+    circleNotes.setTooltip ("The hands play notes, as a theremin, an air guitar or with circles");
+    handMode.box.setTooltip ("Theremin: an open hand sings, its height the note, a fist stops it. "
+                             "Air guitar: swipe a hand down or up to strum; your other hand's height picks the chord. "
+                             "Circles: every circle a hand draws plays a note, big low, small high, fast loud");
+    circleNote.slider.setTooltip ("The lowest note the hands play; higher hands (and smaller circles) climb two octaves of the scale");
+    circleLength.slider.setTooltip ("How long a strum or a circle rings");
     faceChannels.setTooltip ("Face 1 plays on the MIDI channel, face 2 on the next and so on (hands after the faces)");
     preview.setTooltip ("Built-in talk-box voices and a bell for the circles, so you hear it straight away. "
                         "Turn off to play another instrument from the MIDI output");
@@ -375,7 +396,7 @@ void MouthEditor::paint (juce::Graphics& g)
     g.setColour (proc.input.faceCount() + proc.input.handCount() > 0 ? Colours::teal : Colours::dim);
     g.drawText (headerText, kW - 520, 0, 504, 46, juce::Justification::centredRight);
 
-    const char* titles[6] = { "CAMERA", "FACES", "HANDS", "NOTES & SOUND", "HAND NOTES & TAKE", "OUTPUTS" };
+    const char* titles[6] = { "CAMERA", "FACES", "HANDS", "NOTES & SOUND", "HANDS PLAY & TAKE", "OUTPUTS" };
     for (int i = 0; i < 6; ++i)
     {
         auto r = panels[i].toFloat();
@@ -451,15 +472,18 @@ void MouthEditor::resized()
     // hand notes & the take
     panels[4] = { x2, panels[3].getBottom() + gap, w2, panels[0].getBottom() - panels[3].getBottom() - gap };
     auto h = panels[4].reduced (14, 0).withTrimmedTop (30);
+    auto hcombos = h.removeFromTop (40);
+    hands.setBounds (hcombos.removeFromLeft (cw));
+    hcombos.removeFromLeft (8);
+    handMode.setBounds (hcombos.removeFromLeft (cw));
+    hcombos.removeFromLeft (8);
+    circleNotes.setBounds (hcombos.removeFromBottom (26));
+    h.removeFromTop (6);
     auto hrow = h.removeFromTop (72);
-    auto hleft = hrow.removeFromLeft (cw + 10);
-    hands.setBounds (hleft.removeFromTop (40));
-    hleft.removeFromTop (4);
-    circleNotes.setBounds (hleft.removeFromTop (26));
+    circleNote.setBounds (hrow.removeFromLeft (cw));
     hrow.removeFromLeft (8);
-    circleNote.setBounds (hrow.removeFromLeft (hrow.getWidth() / 2));
-    circleLength.setBounds (hrow);
-    h.removeFromTop (12);
+    circleLength.setBounds (hrow.removeFromLeft (cw));
+    h.removeFromTop (10);
     auto trow = h.removeFromTop (50);
     record.setBounds (trow.removeFromLeft (80).withSizeKeepingCentre (80, 30));
     trow.removeFromLeft (8);

@@ -53,11 +53,12 @@ Source & updates: https://github.com/buttlerkid/sequencer
 DY Mouth $version  (Windows x64, VST3 instrument, MIDI out)
 ===========================================================
 
-Your webcam follows up to four faces and two hands. Every open mouth sings its own
-note, every circle a hand draws rings one (big circles low, small high, fast loud),
-and smiles, brows, head tilt, pinches and hand height become MIDI controllers.
-Built-in talk-box voices and a bell are on, so you hear it at once. Record a take
-and drag it into Live as a clip.
+Your webcam follows up to four faces and four hands: two people can play together.
+Every open mouth sings its own note; the hands play an air guitar (swipe to strum,
+the other hand's height picks the chord), a theremin (an open hand sings, its height
+the note) or circles; smiles, brows, head tilt, pinches and hand height become MIDI
+controllers. Built-in voices are on, so you hear it at once. Record a take and drag
+it into Live as a clip.
 
 INSTALL
   1. Close Live. Copy the folder  "DY Mouth.vst3"  into  C:\Program Files\Common Files\VST3\
@@ -70,7 +71,8 @@ INSTALL
 FIRST
   Look at the camera with a relaxed, closed mouth and click "Neutral" (with friends:
   everyone at once). Open your mouth past the mark on the OPEN bar: the note plays.
-  Draw circles in the air with a hand: each one rings the bell.
+  Air guitar: swipe one hand down and up to strum, raise and lower the other to change chords.
+  Hands are = Theremin: open a hand and move it up and down.
   Pitch = Head height: raise and lower your head while singing.
 
 RECORD IT

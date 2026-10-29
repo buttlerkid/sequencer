@@ -7,11 +7,11 @@ namespace dy::mouth {
 juce::Colour faceColour (int who)
 {
     static const juce::Colour c[kNumWho] { Colours::brass, Colours::teal, Colours::lilac, juce::Colour (0xffe8897a),
-                                           juce::Colour (0xff8fd18a), juce::Colour (0xfff0d264) };
+                                           juce::Colour (0xff8fd18a), juce::Colour (0xfff0d264), juce::Colour (0xff76b5f5), juce::Colour (0xfff590c8) };
     return c[(size_t) juce::jlimit (0, kNumWho - 1, who)];
 }
 
-juce::StringArray whoNames() { return { "Face 1", "Face 2", "Face 3", "Face 4", "Hand 1", "Hand 2" }; }
+juce::StringArray whoNames() { return { "Face 1", "Face 2", "Face 3", "Face 4", "Hand 1", "Hand 2", "Hand 3", "Hand 4" }; }
 
 // ------------------------------------------------------------------ camera + tracker
 FaceInput::FaceInput() : juce::Thread ("DY Mouth tracker") {}
@@ -89,6 +89,9 @@ Scene FaceInput::scene() const
         f.present[w] = handPresent[h].load();
         for (size_t k = 0; k < (size_t) kNumSources; ++k) f.shapes[w][k] = handShape[h][k].load();
         f.circles[h] = circles[h].load();
+        f.strums[h] = strums[h].load();
+        f.strumSpeed[h] = strumSpeed[h].load();
+        f.strumDirection[h] = strumWay[h].load();
         f.circleSize[h] = circleSize[h].load();
         f.circleSpeed[h] = circleSpeed[h].load();
     }
@@ -256,7 +259,15 @@ void FaceInput::trackHands()
         const float W = (float) (f->w * f->step), H = (float) (f->h * f->step);
         const auto s = measureHand (r.points.data(), W, H);
         auto& det = circleDetectors[id];
-        if (! handPresent[id].load()) det.reset();      // a hand that came back starts a new path
+        auto& strum = strumDetectors[id];
+        if (! handPresent[id].load()) { det.reset(); strum.reset(); }   // a hand that came back starts a new path
+        StrumDetector::Event se;
+        if (strum.add (s.palm, f->time, H, se))
+        {
+            strumSpeed[id] = se.speed;
+            strumWay[id] = se.direction;
+            strums[id] = strums[id].load() + 1;         // the audio thread plays it
+        }
         CircleDetector::Event e;
         if (det.add (s.palm, f->time, H, e))
         {
@@ -269,13 +280,85 @@ void FaceInput::trackHands()
         out[HandX] = s.x; out[HandY] = s.y; out[Pinch] = s.pinch; out[Spread] = s.spread;
         out[Circle] = det.circle(); out[Spin] = det.spin();
         seen[id] = true;
-        HandView v { r.id, r.points, {}, det.circle(), f->time - lastCircleTime[id] };
+        HandView v { r.id, r.points, {}, det.circle(), f->time - lastCircleTime[id],
+                     std::min (10.0, strum.sinceLast (f->time)), strum.lastWay() };
         for (auto& q : det.trail()) v.trail.push_back (q.first);
         views.push_back (std::move (v));
     }
     for (size_t i = 0; i < (size_t) kMaxHands; ++i) handPresent[i] = seen[i];
     std::lock_guard<std::mutex> g (lock);
     shownHands = std::move (views);
+}
+
+// ------------------------------------------------------------------ pluck + theremin
+void PreviewPluck::prepare (double sampleRate)
+{
+    sr = sampleRate;
+    for (auto& s : strings) { s.line.assign ((size_t) (sr / 30.0) + 2, 0.0f); s.left = 0; }
+}
+
+void PreviewPluck::noteOn (int note, float velocity, float pan)
+{
+    auto& s = strings[(size_t) next];
+    next = (next + 1) % (int) strings.size();
+    const double f = 440.0 * std::pow (2.0, (note - 69) / 12.0);
+    s.length = juce::jlimit (2, (int) s.line.size() - 1, (int) std::lround (sr / f));
+    s.pos = 0;
+    // the pluck: noise, smoothed a little (a softer pick for a softer strum)
+    float prev = 0.0f;
+    const float soft = 0.55f - 0.35f * velocity;
+    for (int i = 0; i < s.length; ++i)
+    {
+        const float x = (random.nextFloat() * 2.0f - 1.0f) * velocity * 0.5f;
+        prev = prev * soft + x * (1.0f - soft);
+        s.line[(size_t) i] = prev;
+    }
+    s.damp = 0.9965f + 0.0025f * juce::jlimit (0.0f, 1.0f, (float) (60 - note) / 36.0f);   // low strings ring longer
+    s.left = (int) (sr * 3.0);
+    s.pan = pan;
+}
+
+void PreviewPluck::render (float* L, float* R, int n, float level)
+{
+    for (auto& s : strings)
+    {
+        if (s.left <= 0) continue;
+        const float gl = std::sqrt (1.0f - 0.7f * s.pan) * level, gr = std::sqrt (0.3f + 0.7f * s.pan) * level;
+        for (int i = 0; i < n && s.left > 0; ++i, --s.left)
+        {
+            const int nextPos = s.pos + 1 < s.length ? s.pos + 1 : 0;
+            const float y = s.line[(size_t) s.pos];
+            s.line[(size_t) s.pos] = 0.5f * (y + s.line[(size_t) nextPos]) * s.damp;
+            s.pos = nextPos;
+            L[i] += y * gl;
+            if (R != L) R[i] += y * gr;
+        }
+    }
+}
+
+void PreviewTheremin::render (float* L, float* R, int n, int note, float open, float pan, float level)
+{
+    if (note >= 0) lastNote = (float) note;
+    const float targetAmp = note >= 0 ? 0.15f + 0.25f * open : 0.0f;
+    if (targetAmp == 0.0f && amp < 1.0e-4f) { amp = 0.0f; return; }
+    const float targetFreq = 440.0f * std::pow (2.0f, (lastNote - 69.0f) / 12.0f);
+    const float glide = 1.0f - std::exp (-1.0f / (0.06f * (float) sr));       // a theremin slides between notes
+    const float fade = 1.0f - std::exp (-1.0f / (0.02f * (float) sr));
+    for (int i = 0; i < n; ++i)
+    {
+        freq += (targetFreq - freq) * glide;
+        amp += (targetAmp - amp) * fade;
+        where += (pan - where) * fade;
+        vib += 5.5 / sr;
+        if (vib >= 1.0) vib -= 1.0;
+        const double f = freq * std::pow (2.0, 0.12 * std::sin (vib * juce::MathConstants<double>::twoPi) / 12.0);
+        phase += f / sr;
+        if (phase >= 1.0) phase -= 1.0;
+        const double a = phase * juce::MathConstants<double>::twoPi;
+        const float y = amp * level * (float) (std::sin (a) + 0.12 * std::sin (2.0 * a) + 0.05 * std::sin (3.0 * a));
+        L[i] += y * std::sqrt (1.0f - 0.7f * where);
+        if (R != L) R[i] += y * std::sqrt (0.3f + 0.7f * where);
+    }
 }
 
 // ------------------------------------------------------------------ bell + recorder
@@ -458,11 +541,12 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
     l.add (std::make_unique<AudioParameterChoice> (id (PID::chord), "Chord", chords, 1));
     l.add (std::make_unique<AudioParameterChoice> (id (PID::scale), "Scale", scales, 2));
     l.add (std::make_unique<AudioParameterBool>   (id (PID::faceChannels), "Face = Channel", false));
-    l.add (std::make_unique<AudioParameterChoice> (id (PID::hands), "Hands", StringArray { "Off", "1 hand", "2 hands" }, kMaxHands));
-    l.add (std::make_unique<AudioParameterBool>   (id (PID::circleNotes), "Circle Notes", true));
-    l.add (std::make_unique<AudioParameterInt>    (id (PID::circleNote), "Circle Note", 24, 96, 48, noteName));
-    l.add (std::make_unique<AudioParameterFloat>  (id (PID::circleLength), "Circle Note Length", NormalisableRange<float> (0.05f, 2.0f, 0.0f, 0.5f), 0.4f,
+    l.add (std::make_unique<AudioParameterChoice> (id (PID::hands), "Hands", StringArray { "Off", "1 hand", "2 hands", "3 hands", "4 hands" }, kMaxHands));
+    l.add (std::make_unique<AudioParameterBool>   (id (PID::circleNotes), "Hands Play", true));
+    l.add (std::make_unique<AudioParameterInt>    (id (PID::circleNote), "Hand Note", 24, 96, 48, noteName));
+    l.add (std::make_unique<AudioParameterFloat>  (id (PID::circleLength), "Hand Note Length", NormalisableRange<float> (0.05f, 2.0f, 0.0f, 0.5f), 0.8f,
                                                    AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 2) + " s"; })));
+    l.add (std::make_unique<AudioParameterChoice> (id (PID::handMode), "Hand Mode", StringArray { "Theremin", "Air guitar", "Circles" }, HandGuitar));
 
     // defaults: face 1 open -> mod wheel, face 1 tilt -> pitch bend, hand 1 circle -> CC 74, hand 1 height -> CC 11
     const int src[4] = { Open, Tilt, Circle, HandY }, dest[4] = { DestCC, DestPitchBend, DestCC, DestCC }, cc[4] = { 1, 2, 74, 11 };
@@ -489,7 +573,7 @@ static juce::StringArray paramIds()
 {
     juce::StringArray ids { PID::channel, PID::trigger, PID::note, PID::threshold, PID::speed, PID::velocity, PID::preview, PID::previewLevel,
                             PID::faces, PID::pitchMode, PID::chord, PID::scale, PID::faceChannels,
-                            PID::hands, PID::circleNotes, PID::circleNote, PID::circleLength };
+                            PID::hands, PID::circleNotes, PID::circleNote, PID::circleLength, PID::handMode };
     for (int i = 0; i < 4; ++i)
         for (auto* w : { "Src", "Dest", "CC", "Smooth", "Lo", "Hi", "Inv", "Face" }) ids.add (PID::slot (i, w));
     return ids;
@@ -517,10 +601,10 @@ MapperParams MouthProcessor::readParams() const
     p.trigger = f (1) > 0.5f; p.triggerNote = i (2); p.threshold = f (3);
     p.velocityFromSpeed = f (4) > 0.5f; p.velocity = i (5);
     p.pitchMode = i (9); p.chord = i (10); p.scale = i (11); p.faceChannels = f (12) > 0.5f;
-    p.circleNotes = f (14) > 0.5f; p.circleNote = i (15); p.circleLength = f (16);
+    p.handNotes = f (14) > 0.5f; p.handNote = i (15); p.handLength = f (16); p.handMode = i (17);
     for (int s = 0; s < 4; ++s)
     {
-        const int b = 17 + s * 8;
+        const int b = 18 + s * 8;
         p.slots[(size_t) s] = { i (b), i (b + 1), i (b + 2), f (b + 3), f (b + 4), f (b + 5), f (b + 6) > 0.5f, i (b + 7) };
     }
     return p;
@@ -530,6 +614,8 @@ void MouthProcessor::prepareToPlay (double sampleRate, int)
 {
     for (auto& v : voices) v.prepare (sampleRate);
     bell.prepare (sampleRate);
+    pluck.prepare (sampleRate);
+    for (auto& t : theremins) t.prepare (sampleRate);
     triggerAsyncUpdate();             // the camera opens once we are really in use, not while a host scans
 }
 
@@ -591,12 +677,18 @@ void MouthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         midi.addEvent (m, 0);
         recorder.add (m, takeTime);
         // a hand's circle rings the bell, where the hand is
+        // a strum plucks the strings, a circle rings the bell, where the hand is (a theremin plays below)
         if (preview && e.type == MidiOut::NoteOn && e.who >= kMaxFaces)
-            bell.noteOn (e.data1, e.data2 / 127.0f, faces.shapes[(size_t) e.who][HandX]);
+        {
+            const float pan = faces.shapes[(size_t) e.who][HandX];
+            if (mapper.getParams().handMode == HandGuitar) pluck.noteOn (e.data1, e.data2 / 127.0f, pan);
+            else if (mapper.getParams().handMode == HandCircles) bell.noteOn (e.data1, e.data2 / 127.0f, pan);
+        }
     }
 
     for (size_t i = 0; i < slotOut.size(); ++i) slotOut[i] = mapper.slotOutput ((int) i);
     for (int f = 0; f < kMaxFaces; ++f) noteOf[(size_t) f] = mapper.noteOf (f);
+    for (int h = 0; h < kMaxHands; ++h) handNoteOf[(size_t) h] = mapper.handNoteOf (h);
 
     if (preview && buffer.getNumChannels() > 0)
     {
@@ -605,6 +697,10 @@ void MouthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         for (int f = 0; f < kMaxFaces; ++f)
             voices[(size_t) f].render (L, R, n, mapper.noteOf (f), mapper.gate (f), faces.shapes[(size_t) f], raw[7]->load() * 0.8f);
         bell.render (L, R, n, raw[7]->load());
+        pluck.render (L, R, n, raw[7]->load() * 1.6f);
+        for (int h = 0; h < kMaxHands; ++h)
+            theremins[(size_t) h].render (L, R, n, mapper.handNoteOf (h), mapper.gate (handWho (h)),
+                                          faces.shapes[(size_t) handWho (h)][HandX], raw[7]->load());
     }
 }
 

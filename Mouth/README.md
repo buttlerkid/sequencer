@@ -1,13 +1,15 @@
 # DY Mouth
 
 Your webcam follows your faces and hands, and they play Ableton Live (VST3, Windows).
-Up to four faces and two hands at once. Every open mouth sings its own note, every
-circle a hand draws rings one (big circles low, small ones high, fast ones loud), and
-everything else, from a smile to how high your hand is, becomes a MIDI controller.
-Built-in talk-box voices and a bell are on, so you hear it as soon as it is on a track.
-Record a take and drag it into Live as a clip.
+Up to four faces and four hands at once: two people can play together. Every open
+mouth sings its own note; the hands play an **air guitar** (swipe to strum, the other
+hand's height picks the chord), a **theremin** (an open hand sings, its height the
+note) or **circles**; and everything else, from a smile to how high your hand is,
+becomes a MIDI controller. Built-in talk-box voices, plucked strings, theremins and a
+bell are on, so you hear it as soon as it is on a track. Record a take and drag it
+into Live as a clip.
 
-![DY Mouth](../docs/mouth-v0.3.png)
+![DY Mouth](../docs/mouth-v0.4.png)
 
 ## How it works
 
@@ -17,12 +19,15 @@ inside the plugin by ONNX Runtime, on your own computer. No picture leaves it. L
 MediaPipe, each face or hand is detected once and then followed from frame to frame;
 the detector keeps looking for newcomers in the whole picture and in zoomed-in tiles,
 a tile at a time, so people further back are found too (within a couple of metres).
-Faces and hands are tracked on two threads at the same time (two cores), never on the
-audio thread, and the model's worker threads sleep between frames instead of spinning.
+A face or hand is looked for where it was plus how fast it was moving, so a quick
+strum stays followed, and one that slips away is looked for again in the same frame.
+Faces and hands are tracked on two threads, every face and hand on its own core at
+the same time (four hands cost about what two did), never on the audio thread; the
+model's worker threads sleep between frames instead of spinning.
 
 Every face and hand gets a number and a colour, kept while it stays in view; a
 newcomer takes the lowest free number. **Faces** and **Hands** limit how many are
-followed (each face costs about 8 ms a frame, each hand about 10 ms).
+followed.
 
 ### Faces
 
@@ -55,8 +60,10 @@ whole range from then on.
 
 Any circle counts: the palm's recent path is followed and every full turn around its
 middle is one circle, whatever its size, speed or direction (a straight swipe never
-counts). The camera view draws each hand's path, brighter while it circles, and a ring
-flies out when a circle is done.
+counts). A **strum** is a quick swipe up or down (an eighth of the picture or more,
+mostly vertical, in a quarter of a second): down and back up are two strums, one long
+swipe is one. The camera view draws each hand's path, an arrow for every strum, a ring
+for every circle, and the note a theremin hand sings.
 
 ## Notes
 
@@ -69,9 +76,21 @@ snapping the mouth open plays louder. Which note:
 - **Pitch: Head height**: each face sings up a **Scale** as the head rises, two
   octaves from **Note**, gliding legato while the mouth stays open. A face theremin.
 
-**Circles play**: every circle a hand completes plays a note of **Length**: the biggest
-circle plays **Circle note**, smaller ones climb two octaves of the **Scale**, and the
-faster it went round the louder.
+**Hands play**, and **Hands are**:
+
+- **Air guitar**: swipe a hand down or up to strum. The chord is the scale's triad
+  (with the octave) on the degree your *other* hand's height picks, like fretting
+  further up the neck: the bottom of the picture is the first degree, the top the
+  seventh. (The fretting hand is the nearest other hand across the picture, so two
+  people standing apart each play their own guitar; alone with one hand, its own height
+  picks.) The chord is rolled like a real strum, low string first going down, high
+  string first going up, tighter and louder the faster you swipe, and rings for **Length**.
+- **Theremin**: an open hand sings, a fist stops it. Its height picks the note, two
+  octaves of the **Scale** from **Hand note**, gliding legato as it moves. Each hand is
+  its own theremin.
+- **Circles**: every circle a hand completes plays a note of **Length**: the biggest
+  circle plays **Hand note**, smaller ones climb two octaves of the **Scale**, and the
+  faster it went round the louder.
 
 Two players on the same note never cut each other off. **Face = channel** puts face 1
 on the MIDI channel, face 2 on the next and so on, the hands after the faces.
@@ -79,11 +98,13 @@ on the MIDI channel, face 2 on the next and so on, the hands after the faces.
 **Preview sound**: one talk-box voice per face (a buzz through two vowel formants
 that follow that mouth; a smile brightens it, raised brows add vibrato, a head tilt
 bends it up to two semitones, and it sits left or right where the face is) and a bell
-for the circles, placed where the hand is. Turn it off to play another instrument.
+for the circles, a plucked string (Karplus-Strong) for the strums and a theremin (a
+nearly pure tone with a little vibrato, louder the more the hand opens) for each
+theremin hand, all placed where the hand is. Turn it off to play another instrument.
 
 ## Outputs
 
-Four outputs, each with **Who** (Face 1 to 4, Hand 1 or 2), **Source** (the shapes of
+Four outputs, each with **Who** (Face 1 to 4, Hand 1 to 4), **Source** (the shapes of
 that face or hand), **Send as** (Off, **CC** with its number, **Pitch bend** or
 **Pressure**), **Smooth** (0 to 1000 ms), **Min / Max** and **Invert**.
 

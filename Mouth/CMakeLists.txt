@@ -1,4 +1,4 @@
-set(DY_MOUTH_VERSION 0.3.0)
+set(DY_MOUTH_VERSION 0.4.0)
 
 if(DY_BUILD_TESTS)
     add_executable(mouth_tests Tests/MouthTests.cpp Source/Engine/MouthMapper.cpp)

@@ -266,7 +266,7 @@ int main()
     }
     {   // a circle plays a short note: bigger is lower, faster is louder
         MouthMapper m; MapperParams p; for (auto& s : p.slots) s.dest = DestOff;
-        p.trigger = false; p.circleNote = 36; p.scale = 2; p.circleLength = 0.1f;
+        p.trigger = false; p.handNote = 36; p.scale = 2; p.handLength = 0.1f; p.handMode = HandCircles;
         m.setParams (p);
         CHECK (m.circlePitch (1.0f) == 36 && m.circlePitch (0.0f) == 60);
         Scene sc; std::vector<MidiOut> out;
@@ -283,6 +283,79 @@ int main()
         sc.present[(size_t) handWho (0)] = true; sc.shapes[(size_t) handWho (0)][Spin] = 1.0f;
         out.clear(); for (int b = 0; b < 50; ++b) m.process (sc, dt, out);
         CHECK (! out.empty() && out.back().data1 == 9 && out.back().data2 == 127);
+    }
+
+    std::puts ("Strums");
+    {   // a quick swipe down is one strum, back up another; a slow drift or a sideways swipe none
+        auto swipe = [] (StrumDetector& d, double& t, float y0, float y1, float x0, float x1, double seconds, int& n, StrumDetector::Event& last)
+        {
+            for (double k = 0; k <= seconds; k += 1.0 / 30.0, t += 1.0 / 30.0)
+            {
+                const float a = (float) (k / seconds);
+                StrumDetector::Event e;
+                if (d.add ({ x0 + (x1 - x0) * a, y0 + (y1 - y0) * a }, t, 480, e)) { ++n; last = e; }
+            }
+        };
+        StrumDetector d; double t = 0; int n = 0; StrumDetector::Event e {};
+        swipe (d, t, 100, 350, 300, 310, 0.2, n, e);          // down: 0.52 frame heights in 0.2 s
+        CHECK (n == 1 && e.direction == 1 && e.speed > 0.2f);
+        swipe (d, t, 350, 100, 310, 300, 0.2, n, e);          // and straight back up
+        CHECK (n == 2 && e.direction == -1);
+        int slow = 0; StrumDetector s2; double t2 = 0;
+        swipe (s2, t2, 100, 350, 300, 300, 1.5, slow, e);     // a slow drift
+        CHECK (slow == 0);
+        int side = 0; StrumDetector s3; double t3 = 0;
+        swipe (s3, t3, 200, 260, 50, 550, 0.2, side, e);      // a fast sideways swipe
+        CHECK (side == 0);
+        int longOne = 0; StrumDetector s4; double t4 = 0;
+        swipe (s4, t4, 0, 470, 300, 300, 0.3, longOne, e);    // one long swipe is one strum
+        CHECK (longOne == 1);
+    }
+    {   // air guitar: the strum rolls the chord the other hand's height picks, low string first going down
+        MouthMapper m; MapperParams p; for (auto& s : p.slots) s.dest = DestOff;
+        p.trigger = false; p.handMode = HandGuitar; p.handNote = 48; p.scale = 0; p.handLength = 0.3f;   // C major
+        m.setParams (p);
+        Scene sc; std::vector<MidiOut> out;
+        const auto strummer = (size_t) handWho (0), fret = (size_t) handWho (1);
+        sc.present[strummer] = sc.present[fret] = true;
+        sc.shapes[strummer][HandX] = 0.4f; sc.shapes[fret][HandX] = 0.7f;
+        sc.shapes[fret][HandY] = 4.5f / 7.0f;                    // the fifth degree: G major
+        m.process (sc, dt, out);
+        sc.strums[0] = 1; sc.strumSpeed[0] = 1.0f; sc.strumDirection[0] = 1;
+        for (int b = 0; b < 6; ++b) m.process (sc, dt, out);
+        std::vector<int> on; for (auto& x : out) if (x.type == MidiOut::NoteOn) on.push_back (x.data1);
+        CHECK (on.size() == 4 && on[0] == 55 && on[1] == 59 && on[2] == 62 && on[3] == 67);
+        out.clear();
+        for (int b = 0; b < 40; ++b) m.process (sc, dt, out);
+        CHECK (count (out, MidiOut::NoteOff) == 4);
+        // an up strum: high string first
+        out.clear();
+        sc.strums[0] = 2; sc.strumDirection[0] = -1;
+        for (int b = 0; b < 6; ++b) m.process (sc, dt, out);
+        on.clear(); for (auto& x : out) if (x.type == MidiOut::NoteOn) on.push_back (x.data1);
+        CHECK (on.size() == 4 && on[0] == 67 && on[3] == 55);
+    }
+    {   // theremin: an open hand sings its height, gliding; a fist stops it
+        MouthMapper m; MapperParams p; for (auto& s : p.slots) s.dest = DestOff;
+        p.trigger = false; p.handMode = HandTheremin; p.handNote = 60; p.scale = 2;   // pentatonic, 11 steps
+        m.setParams (p);
+        Scene sc; std::vector<MidiOut> out;
+        const auto w = (size_t) handWho (2);
+        sc.present[w] = true; sc.shapes[w][Spread] = 0.2f; sc.shapes[w][HandY] = 0.0f;
+        m.process (sc, dt, out);
+        CHECK (out.empty() && m.handNoteOf (2) < 0);
+        sc.shapes[w][Spread] = 0.9f;
+        m.process (sc, dt, out);
+        CHECK (m.handNoteOf (2) == 60 && count (out, MidiOut::NoteOn) == 1);
+        sc.shapes[w][HandY] = 0.999f;
+        out.clear(); m.process (sc, dt, out);
+        CHECK (m.handNoteOf (2) == 84 && out.size() == 2 && out[0].type == MidiOut::NoteOn && out[1].type == MidiOut::NoteOff);
+        sc.shapes[w][Spread] = 0.45f;                              // half closed: still singing
+        out.clear(); m.process (sc, dt, out);
+        CHECK (out.empty());
+        sc.shapes[w][Spread] = 0.1f;
+        m.process (sc, dt, out);
+        CHECK (count (out, MidiOut::NoteOff) == 1 && m.handNoteOf (2) < 0);
     }
     std::printf ("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

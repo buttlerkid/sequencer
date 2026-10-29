@@ -149,6 +149,32 @@ bool CircleDetector::add (Point p, double t, float frameH, Event& ev)
     return true;
 }
 
+bool StrumDetector::add (Point p, double t, float frameH, Event& ev)
+{
+    path.push_back ({ p, t });
+    while (! path.empty() && t - path.front().second > 0.25) path.pop_front();
+    if (path.size() < 3 || frameH <= 0) return false;
+
+    // how far the palm went up or down in the last quarter second, and how quickly
+    const auto& [p0, t0] = path.front();
+    const float dy = p.y - p0.y, dx = p.x - p0.x;
+    const double span = std::max (1.0e-3, t - t0);
+    const float travel = std::abs (dy) / frameH;
+    const float speed = (float) (travel / span);                 // frame heights a second
+    if (travel < 0.12f || speed < 1.2f || std::abs (dy) < 1.5f * std::abs (dx)) return false;
+
+    const int dir = dy > 0 ? 1 : -1;
+    // back and forth strums come quickly; the same way twice needs a breath between
+    const double since = sinceLast (t);
+    if (since < 0.12 || (dir == lastDirection && since < 0.35)) return false;
+    lastStrum = t;
+    lastDirection = dir;
+    path.clear();
+    path.push_back ({ p, t });
+    ev = { unit ((speed - 1.2f) / 3.0f), dir };
+    return true;
+}
+
 // ------------------------------------------------------------------ MIDI
 void MouthMapper::setParams (const MapperParams& p)
 {
@@ -161,6 +187,11 @@ void MouthMapper::setParams (const MapperParams& p)
     }
     params = p;
     params.channel = std::clamp (params.channel, 1, 16);
+}
+
+int MouthMapper::channelOf (int who) const
+{
+    return params.faceChannels ? std::clamp (params.channel + who, 1, 16) : params.channel;
 }
 
 bool MouthMapper::press (int ch, int note, int velocity, int who, std::vector<MidiOut>& out)
@@ -176,17 +207,27 @@ void MouthMapper::release (int ch, int note, std::vector<MidiOut>& out)
     if (h > 0 && --h == 0) out.push_back ({ MidiOut::NoteOff, ch, note, 0 });
 }
 
-void MouthMapper::noteOn (int face, int note, int velocity, std::vector<MidiOut>& out)
+void MouthMapper::retrigger (int ch, int note, int velocity, int who, std::vector<MidiOut>& out)
 {
-    auto& v = voices[(size_t) face];
-    v.note = std::clamp (note, 0, 127);
-    v.channel = params.faceChannels ? std::clamp (params.channel + face, 1, 16) : params.channel;
-    press (v.channel, v.note, velocity, face, out);
+    // a short note played again while it still rings: end it and strike it anew
+    if (! press (ch, note, velocity, who, out))
+    {
+        out.push_back ({ MidiOut::NoteOff, ch, note, 0 });
+        out.push_back ({ MidiOut::NoteOn, ch, note, std::clamp (velocity, 1, 127), who });
+    }
 }
 
-void MouthMapper::noteOff (int face, std::vector<MidiOut>& out)
+void MouthMapper::noteOn (int who, int note, int velocity, std::vector<MidiOut>& out)
 {
-    auto& v = voices[(size_t) face];
+    auto& v = voices[(size_t) who];
+    v.note = std::clamp (note, 0, 127);
+    v.channel = channelOf (who);
+    press (v.channel, v.note, velocity, who, out);
+}
+
+void MouthMapper::noteOff (int who, std::vector<MidiOut>& out)
+{
+    auto& v = voices[(size_t) who];
     if (v.note < 0) return;
     release (v.channel, v.note, out);
     v.note = -1;
@@ -195,9 +236,9 @@ void MouthMapper::noteOff (int face, std::vector<MidiOut>& out)
 
 void MouthMapper::allOff (std::vector<MidiOut>& out)
 {
-    for (int f = 0; f < kMaxFaces; ++f) noteOff (f, out);
-    for (auto& p : pending) release (p.channel, p.note, out);
-    pending.clear();
+    for (int w = 0; w < kNumWho; ++w) noteOff (w, out);
+    for (auto& q : queue) if (! q.on) release (q.channel, q.note, out);
+    queue.clear();
 }
 
 int MouthMapper::pitchFor (int face, const Shapes& s)
@@ -217,17 +258,55 @@ int MouthMapper::pitchFor (int face, const Shapes& s)
     return std::clamp (params.triggerNote + 12 * (d / n) + steps[(size_t) (d % n)], 0, 127);
 }
 
+int MouthMapper::degreeNote (int degree) const
+{
+    const auto& steps = kScales[(size_t) std::clamp (params.scale, 0, (int) kScales.size() - 1)].steps;
+    const int n = (int) steps.size();
+    degree = std::max (0, degree);
+    return std::clamp (params.handNote + 12 * (degree / n) + steps[(size_t) (degree % n)], 0, 127);
+}
+
+int MouthMapper::handDegree (float height, int& d) const
+{
+    const int n = (int) kScales[(size_t) std::clamp (params.scale, 0, (int) kScales.size() - 1)].steps.size();
+    const int count = 2 * n + 1;
+    const float y = unit (height) * (float) count;
+    if (d < 0 || y < (float) d - 0.25f || y > (float) d + 1.25f)
+        d = std::clamp ((int) std::floor (y), 0, count - 1);
+    return d;
+}
+
 int MouthMapper::circlePitch (float size) const
 {
     // the biggest circle plays the note, smaller ones climb two octaves of the scale
-    const auto& steps = kScales[(size_t) std::clamp (params.scale, 0, (int) kScales.size() - 1)].steps;
-    const int n = (int) steps.size(), count = 2 * n + 1;
-    const int d = std::clamp ((int) std::lround ((1.0f - unit (size)) * (float) (count - 1)), 0, count - 1);
-    return std::clamp (params.circleNote + 12 * (d / n) + steps[(size_t) (d % n)], 0, 127);
+    const int n = (int) kScales[(size_t) std::clamp (params.scale, 0, (int) kScales.size() - 1)].steps.size();
+    const int count = 2 * n + 1;
+    return degreeNote (std::clamp ((int) std::lround ((1.0f - unit (size)) * (float) (count - 1)), 0, count - 1));
+}
+
+std::vector<int> MouthMapper::strumChord (const Scene& scene, int hand) const
+{
+    // the fretting hand: the nearest other hand across the picture (the same person's other
+    // hand, mostly); its height picks the chord, one of the scale's first seven degrees
+    const auto me = (size_t) handWho (hand);
+    int fret = -1;
+    float best = 1.0e9f;
+    for (int h = 0; h < kMaxHands; ++h)
+    {
+        const auto w = (size_t) handWho (h);
+        if (h == hand || ! scene.present[w]) continue;
+        const float d = std::abs (scene.shapes[w][HandX] - scene.shapes[me][HandX]);
+        if (d < best) { best = d; fret = h; }
+    }
+    const float height = scene.shapes[(size_t) handWho (fret >= 0 ? fret : hand)][HandY];
+    const int root = std::clamp ((int) std::floor (unit (height) * 7.0f), 0, 6);
+    const int n = (int) kScales[(size_t) std::clamp (params.scale, 0, (int) kScales.size() - 1)].steps.size();
+    return { degreeNote (root), degreeNote (root + 2), degreeNote (root + 4), degreeNote (root + n) };
 }
 
 void MouthMapper::process (const Scene& scene, double dt, std::vector<MidiOut>& out)
 {
+    clock += dt;
     for (size_t i = 0; i < 4; ++i)
     {
         const auto& s = params.slots[i];
@@ -292,8 +371,7 @@ void MouthMapper::process (const Scene& scene, double dt, std::vector<MidiOut>& 
         {
             // still singing: follow a new pitch (or channel) legato, the new note before the old one ends
             const int pitch = pitchFor (f, s);
-            const int ch = params.faceChannels ? std::clamp (params.channel + f, 1, 16) : params.channel;
-            if (pitch != v.note || ch != v.channel)
+            if (pitch != v.note || channelOf (f) != v.channel)
             {
                 const Voice old = v;
                 noteOn (f, pitch, 90, out);
@@ -303,33 +381,77 @@ void MouthMapper::process (const Scene& scene, double dt, std::vector<MidiOut>& 
         v.gate = v.note >= 0 ? open : 0.0f;
     }
 
-    // the hands' circles: a short note each, big circles low and slow ones soft
-    for (auto it = pending.begin(); it != pending.end();)
-    {
-        it->left -= dt;
-        if (it->left > 0.0) { ++it; continue; }
-        release (it->channel, it->note, out);
-        it = pending.erase (it);
-    }
+    // the hands. Theremin: an open hand sings, its height the note, a fist stops it
     for (int h = 0; h < kMaxHands; ++h)
     {
-        const int count = scene.circles[(size_t) h];
-        auto& seen = circlesSeen[(size_t) h];
-        const bool fresh = seen >= 0 && count > seen;
-        seen = count;
-        if (! fresh || ! params.circleNotes) continue;
-        const int ch = params.faceChannels ? std::clamp (params.channel + handWho (h), 1, 16) : params.channel;
-        const int note = circlePitch (scene.circleSize[(size_t) h]);
-        const int vel = (int) std::lround (50.0f + 77.0f * unit (scene.circleSpeed[(size_t) h]));
-        if (! press (ch, note, vel, handWho (h), out))
+        const int w = handWho (h);
+        auto& v = voices[(size_t) w];
+        const bool present = scene.present[(size_t) w];
+        const auto& s = scene.shapes[(size_t) w];
+        if (! params.handNotes || params.handMode != HandTheremin || ! present)
         {
-            // already sounding (a quick second circle): end the old one, play it again
-            for (auto& p : pending) if (p.channel == ch && p.note == note) p.left = 0.0;
-            out.push_back ({ MidiOut::NoteOff, ch, note, 0 });
-            out.push_back ({ MidiOut::NoteOn, ch, note, vel, handWho (h) });
+            noteOff (w, out);
+            v.degree = -1;
+            continue;
         }
-        pending.push_back ({ ch, note, params.circleLength });
+        const float open = s[Spread];
+        if (v.note < 0 && open > 0.55f)
+            noteOn (w, degreeNote (handDegree (s[HandY], v.degree)), 100, out);
+        else if (v.note >= 0 && open < 0.35f)
+            noteOff (w, out);
+        else if (v.note >= 0)
+        {
+            const int pitch = degreeNote (handDegree (s[HandY], v.degree));
+            if (pitch != v.note || channelOf (w) != v.channel)
+            {
+                const Voice old = v;
+                noteOn (w, pitch, 100, out);
+                release (old.channel, old.note, out);
+            }
+        }
+        v.gate = v.note >= 0 ? open : 0.0f;
     }
+
+    // strums and circles: short notes, through a little queue (a strum rolls its chord)
+    for (int h = 0; h < kMaxHands; ++h)
+    {
+        const int w = handWho (h);
+        const int ch = channelOf (w);
+        auto fresh = [] (int count, int& seen) { const bool f = seen >= 0 && count > seen; seen = count; return f; };
+        const bool strum = fresh (scene.strums[(size_t) h], strumsSeen[(size_t) h]);
+        const bool circle = fresh (scene.circles[(size_t) h], circlesSeen[(size_t) h]);
+        if (! params.handNotes) continue;
+        if (strum && params.handMode == HandGuitar)
+        {
+            auto notes = strumChord (scene, h);
+            const float speed = unit (scene.strumSpeed[(size_t) h]);
+            const bool up = scene.strumDirection[(size_t) h] < 0;
+            if (up) std::reverse (notes.begin(), notes.end());     // an up strum starts on the high string
+            const int vel = (int) std::lround ((55.0f + 72.0f * speed) * (up ? 0.85f : 1.0f));
+            const double roll = 0.028 - 0.016 * speed;            // a fast strum rolls tighter
+            for (size_t k = 0; k < notes.size(); ++k)
+            {
+                queue.push_back ({ clock + roll * (double) k, true, ch, notes[k], vel, w });
+                queue.push_back ({ clock + roll * (double) k + params.handLength, false, ch, notes[k], 0, w });
+            }
+        }
+        if (circle && params.handMode == HandCircles)
+        {
+            const int note = circlePitch (scene.circleSize[(size_t) h]);
+            const int vel = (int) std::lround (50.0f + 77.0f * unit (scene.circleSpeed[(size_t) h]));
+            queue.push_back ({ clock, true, ch, note, vel, w });
+            queue.push_back ({ clock + params.handLength, false, ch, note, 0, w });
+        }
+    }
+    std::stable_sort (queue.begin(), queue.end(), [] (const Timed& a, const Timed& b) { return a.at < b.at; });
+    size_t due = 0;
+    for (; due < queue.size() && queue[due].at <= clock; ++due)
+    {
+        const auto& q = queue[due];
+        if (q.on) retrigger (q.channel, q.note, q.velocity, q.who, out);
+        else release (q.channel, q.note, out);
+    }
+    queue.erase (queue.begin(), queue.begin() + (std::ptrdiff_t) due);
 }
 
 } // namespace dy::mouth
