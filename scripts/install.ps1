@@ -1,11 +1,11 @@
 # Copy the built VST3 into a folder Ableton Live scans.
 #   .\scripts\install.ps1          -> C:\Program Files\Common Files\VST3 (elevates if needed)
 #   .\scripts\install.ps1 -User    -> %LOCALAPPDATA%\VST3 (no admin; set it as Live's custom VST3 folder)
-param([ValidateSet("Sequencer", "Nodal", "Pendulum", "Dub")] [string] $Module = "Sequencer", [switch] $User, [string] $Config = "Release")
+param([ValidateSet("Sequencer", "Nodal", "Pendulum", "Dub", "Mouth")] [string] $Module = "Sequencer", [switch] $User, [string] $Config = "Release")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 # target folder -> product name; Nodal ships an effect and an instrument
-$products = @{ Sequencer = @(, @("DYSequencer", "DY Sequencer")); Nodal = @(@("DYNodal", "DY Nodal"), @("DYNodalInstrument", "DY Nodal Instrument")); Pendulum = @(, @("DYPendulum", "DY Pendulum")); Dub = @(, @("DYDub", "DY Dub")) }[$Module]
+$products = @{ Sequencer = @(, @("DYSequencer", "DY Sequencer")); Nodal = @(@("DYNodal", "DY Nodal"), @("DYNodalInstrument", "DY Nodal Instrument")); Pendulum = @(, @("DYPendulum", "DY Pendulum")); Dub = @(, @("DYDub", "DY Dub")); Mouth = @(, @("DYMouth", "DY Mouth")) }[$Module]
 foreach ($pr in $products) {
     $src = Join-Path $root "build\$Module\$($pr[0])_artefacts\$Config\VST3\$($pr[1]).vst3"
     if (-not (Test-Path $src)) { throw "Build first: $src not found" }

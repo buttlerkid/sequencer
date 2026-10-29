@@ -1,11 +1,11 @@
 # Zip a built VST3 for sharing: dist\DY-<Module>-<version>-win-x64.zip
 #   .\scripts\package.ps1 -Module Sequencer | Nodal
-param([ValidateSet("Sequencer", "Nodal", "Pendulum", "Dub")] [string] $Module = "Sequencer", [string] $Config = "Release")
+param([ValidateSet("Sequencer", "Nodal", "Pendulum", "Dub", "Mouth")] [string] $Module = "Sequencer", [string] $Config = "Release")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$product = @{ Sequencer = "DY Sequencer"; Nodal = "DY Nodal"; Pendulum = "DY Pendulum"; Dub = "DY Dub" }[$Module]
+$product = @{ Sequencer = "DY Sequencer"; Nodal = "DY Nodal"; Pendulum = "DY Pendulum"; Dub = "DY Dub"; Mouth = "DY Mouth" }[$Module]
 # target folder -> product name; Nodal ships an effect and an instrument
-$products = @{ Sequencer = @(, @("DYSequencer", "DY Sequencer")); Nodal = @(@("DYNodal", "DY Nodal"), @("DYNodalInstrument", "DY Nodal Instrument")); Pendulum = @(, @("DYPendulum", "DY Pendulum")); Dub = @(, @("DYDub", "DY Dub")) }[$Module]
+$products = @{ Sequencer = @(, @("DYSequencer", "DY Sequencer")); Nodal = @(@("DYNodal", "DY Nodal"), @("DYNodalInstrument", "DY Nodal Instrument")); Pendulum = @(, @("DYPendulum", "DY Pendulum")); Dub = @(, @("DYDub", "DY Dub")); Mouth = @(, @("DYMouth", "DY Mouth")) }[$Module]
 foreach ($pr in $products) {
     $src = Join-Path $root "build\$Module\$($pr[0])_artefacts\$Config\VST3\$($pr[1]).vst3"
     if (-not (Test-Path $src)) { throw "Build first: $src not found" }
@@ -20,6 +20,10 @@ New-Item -ItemType Directory -Force $stage | Out-Null
 
 foreach ($pr in $products) {
     Copy-Item -Recurse (Join-Path $root "build\$Module\$($pr[0])_artefacts\$Config\VST3\$($pr[1]).vst3") (Join-Path $stage "$($pr[1]).vst3")
+}
+if ($Module -eq "Mouth") {
+    # the standalone too: with a virtual MIDI cable it reaches any knob in Live
+    Copy-Item -Recurse (Join-Path $root "build\Mouth\DYMouth_artefacts\$Config\Standalone") (Join-Path $stage "Standalone")
 }
 Copy-Item (Join-Path $root "LICENSE") $stage
 $readme = if ($Module -eq "Dub") {
@@ -41,6 +45,43 @@ TRY
   Lanes: drag across bars to draw, click toggles, right-click a lane for tools.
   Click a step number to edit its volume / filter envelope. Right-click a knob to
   hand it to an LFO or the input follower.
+
+Source & updates: https://github.com/buttlerkid/sequencer
+"@
+} elseif ($Module -eq "Mouth") {
+@"
+DY Mouth $version  (Windows x64, VST3 instrument, MIDI out)
+===========================================================
+
+Your webcam follows your mouth: how open, how wide, smiling, puckered. Each of
+four outputs sends one of them as a MIDI CC, pitch bend or pressure, and opening
+your mouth can play a note. A built-in talk-box voice is on so you hear it at once.
+
+INSTALL
+  1. Copy the folder  "DY Mouth.vst3"  into  C:\Program Files\Common Files\VST3\
+     (keep everything inside it: DYMouth.onnxruntime.dll runs the face model)
+  2. Ableton Live: Options > Preferences > Plug-Ins > "Use VST3 Plug-In System Folders" = On, Rescan.
+  3. Browser > Plug-Ins > VST3 > dy > DY Mouth  ->  drag onto a MIDI track. Open its window.
+  4. Windows: Settings > Privacy & security > Camera > "Let desktop apps access your camera" = On.
+     Close other apps that use the webcam (Zoom, Teams, OBS...).
+
+FIRST
+  Look at the camera with a relaxed, closed mouth and click "Neutral".
+  Open your mouth past the mark on the OPEN bar: the note plays.
+
+CONTROL ANOTHER INSTRUMENT
+  Turn "Preview sound" off. On a second MIDI track: MIDI From = the DY Mouth track,
+  second box = "DY Mouth", Monitor = In, and put an instrument there. Wavetable and
+  Operator: route Mod Wheel / Pressure in their MIDI modulation; most synths also
+  take CC 74 (brightness).
+
+CONTROL ANY KNOB IN LIVE
+  Run Standalone\DY Mouth.exe next to Live. Options > Audio/MIDI Settings: MIDI
+  output = a virtual MIDI cable such as loopMIDI. In Live's MIDI preferences turn
+  Remote on for that port, then Ctrl+M, click a knob and move your mouth.
+
+Face model: MediaPipe Face Landmarker (Google, Apache 2.0). Runs on your computer;
+no picture ever leaves it.
 
 Source & updates: https://github.com/buttlerkid/sequencer
 "@
